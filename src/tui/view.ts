@@ -501,7 +501,7 @@ function pickerPane(snapshot: Snapshot, geometry: Layout): string[] {
 
   const out = [...head, ...visible]
   while (out.length < height - 1) out.push('')
-  const action = picker.kind === 'models' ? 'select' : 'open'
+  const action = picker.kind === 'models' ? 'select' : picker.kind === 'delete' ? 'delete' : 'open'
   const count = `${matches.length}/${picker.items.length}`
   out.push(
     muted(`↑↓ move  ·  enter ${action}  ·  esc back`) +
