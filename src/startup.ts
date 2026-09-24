@@ -1,0 +1,111 @@
+/**
+ * The terminal app's command-line provider.
+ *
+ * It parses this app's own flags out of the shared immutable cmdline snapshot
+ * and publishes them as a service, so the app row can consume them lazily —
+ * the same shape the shipped headless bundle uses.
+ * @module dsh-tui-app/startup
+ */
+
+import { Command } from 'commander'
+import type { Context } from '@deepseek-ai/cordis'
+import { parseCmdline } from '@deepseek-ai/dsh-cmdline'
+
+/** Stable Cordis plugin name. */
+export const name = 'tui-startup'
+
+/** Services required before the flags can be resolved. */
+export const inject = ['cmdlineArgs']
+
+/** Service key provided by this plugin and injected by the app row. */
+export const TUI_STARTUP_SERVICE = 'tuiStartup'
+
+/** What the app row reads from {@link TUI_STARTUP_SERVICE}. */
+export interface TuiStartupValues {
+  /** Exact session to adopt on launch; absent starts a fresh one. */
+  resumeSessionId: string | undefined
+  /** Model override for this run; absent uses the profile's default. */
+  model: string | undefined
+  /** Whether reasoning output starts visible. */
+  thinking: boolean
+  /** Context budget override; absent means use the model's own capacity. */
+  contextLimit: number | undefined
+  /** Report mouse events so the wheel scrolls; off by default. */
+  mouse: boolean
+  /** Ring the bell when a session's turn finishes; on by default. */
+  bell: boolean
+}
+
+/** This app's command grammar, help text, and examples. */
+function tuiCommand(): Command {
+  return new Command()
+    .name('dsh --profile tui')
+    .description('An interactive terminal client for the Harness.')
+    .helpOption('-h, --help', 'show this help')
+    .option('--resume <id>', 'open the persisted session with this id instead of a new one')
+    .option('--model <name>', 'model to select for this run')
+    .option('--thinking', 'start with reasoning output visible')
+    .option('--context-limit <tokens>', "context budget override; default is the model's own capacity")
+    .option('--mouse', 'report mouse events so the wheel scrolls (disables terminal text selection)')
+    .option('--no-bell', 'stay silent when a session finishes instead of ringing the terminal bell')
+    .addHelpText(
+      'after',
+      `
+Examples:
+  dsh --profile tui                      start a new session
+  dsh --profile tui --resume session-...  reopen an existing session
+  dsh --profile tui --thinking            show the reasoner's chain of thought
+
+Inside the app, type / for the command palette and ctrl+c to quit.
+`,
+    )
+}
+
+/**
+ * Parse this app's flags and provide them as an ordinary Cordis service.
+ * @param ctx - plugin context carrying the command line.
+ */
+export function apply(ctx: Context): void {
+  const program = tuiCommand()
+  program.action(() => {
+    const options = program.opts<{
+      resume?: string
+      model?: string
+      thinking?: boolean
+      contextLimit?: string
+      mouse?: boolean
+      bell?: boolean
+    }>()
+
+    if (options.resume !== undefined && options.resume.trim() === '') {
+      program.error('error: --resume requires a non-empty session id')
+    }
+
+    // Left undefined, the app asks the provider for the model's real capacity.
+    let contextLimit: number | undefined
+    const fromEnvironment = process.env['DSH_TUI_CONTEXT_LIMIT']
+    if (fromEnvironment !== undefined && /^\d+$/.test(fromEnvironment)) {
+      contextLimit = Number.parseInt(fromEnvironment, 10)
+    }
+    if (options.contextLimit !== undefined) {
+      if (!/^\d+$/.test(options.contextLimit)) {
+        program.error('error: --context-limit requires a positive integer')
+      }
+      contextLimit = Number.parseInt(options.contextLimit, 10)
+    }
+    if (contextLimit !== undefined && contextLimit <= 0) {
+      program.error('error: --context-limit must be greater than zero')
+    }
+
+    ctx.provide(TUI_STARTUP_SERVICE, {
+      resumeSessionId: options.resume,
+      model: options.model,
+      thinking: options.thinking === true,
+      contextLimit,
+      mouse: options.mouse === true,
+      // commander maps --no-bell to bell: false and leaves it true otherwise.
+      bell: options.bell !== false,
+    } satisfies TuiStartupValues)
+  })
+  parseCmdline(ctx, program)
+}

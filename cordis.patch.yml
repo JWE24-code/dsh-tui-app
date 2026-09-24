@@ -1,0 +1,36 @@
+# The dsh-tui bundle patch: an interactive terminal app over dsh-base.
+#
+# It mounts no Host, HTTP server, or browser plugin — the terminal is the only
+# surface. A startup provider parses this app's own flags out of the shared
+# cmdline snapshot, and the app row consumes them lazily the way the shipped
+# headless bundle does.
+
+- id: system-prompt
+  config:
+    personaSuffix: Your working directory is {{cwd}}.
+    personaPrefix: >-
+      You are a coding agent powered by the {{model}} model.
+
+- id: tools
+  config:
+    mode: !!js process.env.DSH_TOOLS_MODE
+
+- insert:
+    - id: tui-startup
+      name: 'dsh-tui-app/startup'
+
+    - id: tui-app
+      name: 'dsh-tui-app'
+      inject: [tuiStartup]
+      config:
+        resumeSessionId: !!js ctx.tuiStartup.resumeSessionId
+        model: !!js ctx.tuiStartup.model
+        thinking: !!js ctx.tuiStartup.thinking
+        contextLimit: !!js ctx.tuiStartup.contextLimit
+        mouse: !!js ctx.tuiStartup.mouse
+        bell: !!js ctx.tuiStartup.bell
+
+# The terminal owns the screen; a hot reload repainting underneath it would
+# corrupt the alternate buffer.
+- id: hmr
+  disabled: true

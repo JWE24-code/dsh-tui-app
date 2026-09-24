@@ -1,0 +1,377 @@
+/**
+ * App state: the transcript, the composer, the slash palette, and the picker.
+ *
+ * This module is deliberately free of terminal and Harness concerns so the
+ * interaction rules stay testable on their own — it only knows strings,
+ * cursors, and selections.
+ * @module
+ */
+
+import { displayWidth, wrap } from './text.ts'
+
+/** Minimum and maximum composer height, in text rows. */
+export const MIN_INPUT_LINES = 1
+export const MAX_INPUT_LINES = 10
+
+/** One turn of the transcript. */
+export interface Message {
+  role: 'user' | 'assistant'
+  content: string
+  /** Reasoning text, shown only when thinking is toggled on. */
+  reasoning?: string
+  /** Tool activity observed during this turn, newest last. */
+  tools?: readonly ToolActivity[]
+  /** Set when this message is a command result rather than model output. */
+  command?: { name: string; ok: boolean }
+}
+
+/** A single tool invocation surfaced in the transcript. */
+export interface ToolActivity {
+  /** Provider-issued call id; the only stable handle across argument deltas. */
+  id?: string
+  name: string
+  status: 'running' | 'ok' | 'error'
+  detail?: string
+}
+
+/**
+ * What a session is doing, for the tab bar.
+ *
+ * `ready` is the state worth interrupting someone for: the turn finished and
+ * the answer has not been seen. It is what the bell announces.
+ */
+export type SessionStatus = 'idle' | 'running' | 'ready'
+
+/** One open session, as the tab bar shows it. */
+export interface SessionSummary {
+  id: string
+  title: string
+  status: SessionStatus
+  active: boolean
+}
+
+/**
+ * A live agent other than the one the transcript is showing.
+ *
+ * The Harness can run delegated work — subagents the foreground turn spawned —
+ * and without a row here that work is invisible: the screen looks idle while
+ * the machine is busy.
+ */
+export interface BackgroundAgent {
+  /** Session id, used as the stable identity. */
+  id: string
+  /** Short human label: the preset name when composed from one. */
+  label: string
+  status: 'idle' | 'running'
+  /** Delegation depth; 1 is a direct child of the foreground agent. */
+  depth: number
+  /** Epoch millis when this agent was first seen. */
+  startedAt: number
+}
+
+/** A slash command as the palette shows it. */
+export interface PaletteCommand {
+  name: string
+  args: string
+  description: string
+}
+
+/** Which list the picker is currently showing. */
+export type PickerKind = 'sessions' | 'models' | 'open' | 'none'
+
+/** One row in the picker. */
+export interface PickerItem {
+  id: string
+  title: string
+  subtitle: string
+  /** Set on a model row: the provider route that owns the model. */
+  provider?: string
+  /** Set on a model row: the model id passed to the request. */
+  model?: string
+  /** Marks the row that is currently in use. */
+  active?: boolean
+}
+
+/**
+ * The composer. A plain multi-line buffer with a cursor, wide enough in
+ * behavior to feel like an editor: word motion, line motion, and kill-to-end.
+ */
+export class Composer {
+  private text = ''
+  private cursor = 0
+
+  value(): string {
+    return this.text
+  }
+
+  position(): number {
+    return this.cursor
+  }
+
+  setValue(value: string): void {
+    this.text = value
+    this.cursor = value.length
+  }
+
+  reset(): void {
+    this.text = ''
+    this.cursor = 0
+  }
+
+  insert(chunk: string): void {
+    this.text = this.text.slice(0, this.cursor) + chunk + this.text.slice(this.cursor)
+    this.cursor += chunk.length
+  }
+
+  backspace(): void {
+    if (this.cursor === 0) return
+    this.text = this.text.slice(0, this.cursor - 1) + this.text.slice(this.cursor)
+    this.cursor -= 1
+  }
+
+  deleteForward(): void {
+    if (this.cursor >= this.text.length) return
+    this.text = this.text.slice(0, this.cursor) + this.text.slice(this.cursor + 1)
+  }
+
+  /** Delete from the cursor back to the start of the current word. */
+  deleteWord(): void {
+    if (this.cursor === 0) return
+    let start = this.cursor
+    while (start > 0 && /\s/.test(this.text[start - 1] ?? '')) start -= 1
+    while (start > 0 && !/\s/.test(this.text[start - 1] ?? '')) start -= 1
+    this.text = this.text.slice(0, start) + this.text.slice(this.cursor)
+    this.cursor = start
+  }
+
+  /** Delete from the cursor to the end of the buffer. */
+  killToEnd(): void {
+    this.text = this.text.slice(0, this.cursor)
+  }
+
+  /** Delete from the start of the buffer to the cursor. */
+  killToStart(): void {
+    this.text = this.text.slice(this.cursor)
+    this.cursor = 0
+  }
+
+  left(): void {
+    if (this.cursor > 0) this.cursor -= 1
+  }
+
+  right(): void {
+    if (this.cursor < this.text.length) this.cursor += 1
+  }
+
+  wordLeft(): void {
+    while (this.cursor > 0 && /\s/.test(this.text[this.cursor - 1] ?? '')) this.cursor -= 1
+    while (this.cursor > 0 && !/\s/.test(this.text[this.cursor - 1] ?? '')) this.cursor -= 1
+  }
+
+  wordRight(): void {
+    const length = this.text.length
+    while (this.cursor < length && /\s/.test(this.text[this.cursor] ?? '')) this.cursor += 1
+    while (this.cursor < length && !/\s/.test(this.text[this.cursor] ?? '')) this.cursor += 1
+  }
+
+  home(): void {
+    const start = this.text.lastIndexOf('\n', Math.max(this.cursor - 1, 0))
+    this.cursor = start === -1 ? 0 : start + 1
+  }
+
+  end(): void {
+    const next = this.text.indexOf('\n', this.cursor)
+    this.cursor = next === -1 ? this.text.length : next
+  }
+
+  toStart(): void {
+    this.cursor = 0
+  }
+
+  toEnd(): void {
+    this.cursor = this.text.length
+  }
+
+  /** Move the cursor one visual row up or down within the wrapped composer. */
+  moveRow(delta: number, width: number): void {
+    const rows = this.layout(width)
+    const current = rows.findIndex((row) => this.cursor >= row.start && this.cursor <= row.end)
+    if (current === -1) return
+    const target = current + delta
+    if (target < 0 || target >= rows.length) return
+    const column = this.cursor - (rows[current]?.start ?? 0)
+    const destination = rows[target]
+    if (destination === undefined) return
+    this.cursor = Math.min(destination.start + column, destination.end)
+  }
+
+  /**
+   * Wrap the buffer to `width`, returning each visual row with the buffer
+   * offsets it covers. The view and the cursor both read this, so they cannot
+   * disagree about where a row begins.
+   */
+  layout(width: number): { text: string; start: number; end: number }[] {
+    const rows: { text: string; start: number; end: number }[] = []
+    let offset = 0
+    for (const logical of this.text.split('\n')) {
+      const pieces = width > 0 ? wrap(logical, width) : [logical]
+      let consumed = 0
+      for (const piece of pieces) {
+        // wrap() drops the space it broke on; find the true span in the source.
+        const start = offset + consumed
+        const pieceLength = piece.length
+        rows.push({ text: piece, start, end: start + pieceLength })
+        consumed += pieceLength
+        if (logical[start + pieceLength - offset] === ' ') consumed += 1
+      }
+      if (pieces.length === 0) rows.push({ text: '', start: offset, end: offset })
+      offset += logical.length + 1
+    }
+    return rows
+  }
+
+  /** Height in rows the composer wants at `width`, clamped to the app's bounds. */
+  height(width: number): number {
+    const rows = this.layout(width).length
+    return Math.min(Math.max(rows, MIN_INPUT_LINES), MAX_INPUT_LINES)
+  }
+}
+
+/** The popup that filters slash commands as they are typed. */
+export class Palette {
+  open = false
+  matches: PaletteCommand[] = []
+  selected = 0
+
+  /**
+   * Recompute from the composer text. The palette lives only while the input
+   * is a single unfinished `/word`; once a space is typed the user has moved
+   * on to the command's own arguments.
+   */
+  update(input: string, commands: readonly PaletteCommand[]): void {
+    if (!input.startsWith('/') || /[\s\n]/.test(input)) {
+      this.close()
+      return
+    }
+    const prefix = input.slice(1).toLowerCase()
+    this.matches = commands.filter((command) => command.name.startsWith(prefix))
+    this.open = this.matches.length > 0
+    if (this.selected >= this.matches.length) this.selected = this.matches.length - 1
+    if (this.selected < 0) this.selected = 0
+  }
+
+  move(delta: number): void {
+    if (!this.open || this.matches.length === 0) return
+    this.selected = (this.selected + delta + this.matches.length) % this.matches.length
+  }
+
+  current(): PaletteCommand | undefined {
+    if (!this.open) return undefined
+    return this.matches[this.selected]
+  }
+
+  close(): void {
+    this.open = false
+    this.matches = []
+    this.selected = 0
+  }
+}
+
+/**
+ * Subsequence match, the same shape of filter an editor's command palette
+ * uses: every character of the query appears in order, not necessarily
+ * adjacent, so "g53" finds "glm-5.3".
+ */
+export function fuzzyMatch(query: string, text: string): boolean {
+  if (query === '') return true
+  let index = 0
+  for (const char of text) {
+    if (char === query[index]) {
+      index += 1
+      if (index === query.length) return true
+    }
+  }
+  return false
+}
+
+/**
+ * The full-pane list that replaces the transcript for `/resume` and `/model`.
+ *
+ * It filters as you type and, when grouped, prints a header each time the
+ * subtitle changes — so a model list reads provider by provider rather than as
+ * one undifferentiated column.
+ */
+export class Picker {
+  kind: PickerKind = 'none'
+  title = ''
+  items: PickerItem[] = []
+  selected = 0
+  query = ''
+  /** Whether rows are grouped under their subtitle. */
+  grouped = false
+
+  show(
+    kind: Exclude<PickerKind, 'none'>,
+    title: string,
+    items: PickerItem[],
+    options: { grouped?: boolean } = {},
+  ): void {
+    this.kind = kind
+    this.title = title
+    this.items = items
+    this.selected = 0
+    this.query = ''
+    this.grouped = options.grouped === true
+  }
+
+  hide(): void {
+    this.kind = 'none'
+    this.items = []
+    this.selected = 0
+    this.query = ''
+    this.grouped = false
+  }
+
+  /** Rows surviving the current query, in their original order. */
+  matches(): PickerItem[] {
+    const query = this.query.trim().toLowerCase()
+    if (query === '') return this.items
+    return this.items.filter((item) =>
+      fuzzyMatch(query, `${item.subtitle} ${item.title} ${item.id}`.toLowerCase()),
+    )
+  }
+
+  /** Narrow or widen the filter, keeping the selection in range. */
+  setQuery(query: string): void {
+    this.query = query
+    this.selected = 0
+  }
+
+  move(delta: number): void {
+    const count = this.matches().length
+    if (count === 0) return
+    this.selected = Math.min(Math.max(this.selected + delta, 0), count - 1)
+  }
+
+  /** Put the cursor on a given row of the unfiltered list, if it survives. */
+  selectById(id: string): void {
+    const index = this.matches().findIndex((item) => item.id === id)
+    if (index !== -1) this.selected = index
+  }
+
+  current(): PickerItem | undefined {
+    return this.matches()[this.selected]
+  }
+}
+
+/** Format a token count the way a status bar wants it: 834, 1.2K, 64K. */
+export function formatTokens(count: number): string {
+  if (count < 1000) return String(count)
+  if (count < 10000) return `${(count / 1000).toFixed(1)}K`
+  return `${Math.floor(count / 1000)}K`
+}
+
+/** A deliberately rough chars/4 estimate, used until real usage is reported. */
+export function estimateTokens(text: string): number {
+  return Math.ceil(displayWidth(text) / 4)
+}

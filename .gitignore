@@ -1,0 +1,6 @@
+node_modules
+lib
+*.tsbuildinfo
+
+# Claude Code worktrees and local session state live inside the repo.
+.claude
