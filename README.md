@@ -267,7 +267,7 @@ alongside the app's own:
 | Command | Owner |
 |---|---|
 | `/compact`, and any other plugin command | `ctx.commands` (the Harness registry) |
-| `/new`, `/sessions`, `/close`, `/resume`, `/model`, `/thinking`, `/tools`, `/find`, `/unqueue`, `/copy`, `/about`, `/help`, `/exit` (`/quit`) | this app |
+| `/new`, `/sessions`, `/close`, `/resume`, `/delete`, `/model`, `/thinking`, `/tools`, `/export`, `/find`, `/unqueue`, `/copy`, `/about`, `/help`, `/exit` (`/quit`) | this app |
 
 Unknown commands are dispatched to `ctx.commands.execute()` and only reported
 as unknown if the registry also rejects them.
@@ -295,6 +295,7 @@ src/
   index.ts         the app plugin: Harness wiring, key dispatch, commands
   startup.ts       the cmdline provider (--resume/--model/--thinking/...)
   persist.ts       durable composer history and preferences under $DSH_HOME
+  sessions-store.ts  session storage paths and deletion under $DSH_HOME
   version.ts       reads the package version for --version and /about
   tui/
     screen.ts      raw mode, alternate screen, per-line diffed painting
@@ -302,6 +303,7 @@ src/
     view.ts        frame composition and layout arithmetic
     state.ts       composer, palette, picker, history, token formatting
     stream.ts      projects assistant-stream chunks onto the transcript
+    export.ts      transcript to markdown for /export
     markdown.ts    markdown to ANSI plus a small syntax highlighter
     text.ts        ANSI-aware width, wrap, truncate
     theme.ts       adaptive palette and SGR styling

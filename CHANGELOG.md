@@ -50,6 +50,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`test:pty` folded into `npm test`** — the pty round trip now runs as part
   of the default suite (it skips itself where `script(1)` is absent), so local
   and CI runs no longer diverge.
+- **`/delete`** — remove a stored session from disk for good, with a yes/no
+  confirmation drawn in the composer. Mirrors the JSONL store's path encoding
+  so the right directory is removed, and sessions open in a tab are excluded
+  from the picker.
+- **`/export`** — write the active transcript to a markdown file (defaulting to
+  `dsh-transcript-<timestamp>.md` in the session's working directory), with
+  user turns quoted, reasoning folded into a `<details>` block, and tool
+  activity summarised as a checklist.
 
 ### Changed
 

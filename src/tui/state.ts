@@ -80,7 +80,7 @@ export interface PaletteCommand {
 }
 
 /** Which list the picker is currently showing. */
-export type PickerKind = 'sessions' | 'models' | 'open' | 'none'
+export type PickerKind = 'sessions' | 'models' | 'open' | 'delete' | 'none'
 
 /** One row in the picker. */
 export interface PickerItem {

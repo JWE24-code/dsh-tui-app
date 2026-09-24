@@ -11,6 +11,8 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { writeFile } from 'node:fs/promises'
+import { isAbsolute, join, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { brandString } from '@deepseek-ai/dsh-brand'
@@ -48,6 +50,8 @@ import {
   type Snapshot,
 } from './tui/view.ts'
 import { projectStreamChunk } from './tui/stream.ts'
+import { transcriptMarkdown } from './tui/export.ts'
+import { deleteStoredSessionDir, findStoredSessionDir } from './sessions-store.ts'
 import { loadState, saveStateSync, type PersistedState } from './persist.ts'
 import { VERSION } from './version.ts'
 
@@ -99,9 +103,11 @@ const BUILTIN_COMMANDS: readonly PaletteCommand[] = [
   { name: 'sessions', args: '', description: 'Switch between open sessions' },
   { name: 'close', args: '', description: 'Close this session' },
   { name: 'resume', args: '', description: 'Pick up an earlier session' },
+  { name: 'delete', args: '', description: 'Delete a stored session for good' },
   { name: 'model', args: '[name]', description: 'Switch model; no argument lists them' },
   { name: 'thinking', args: '', description: "Toggle display of the reasoner's chain-of-thought" },
   { name: 'tools', args: '', description: 'List the tools this agent can call' },
+  { name: 'export', args: '[file]', description: 'Write this transcript to a markdown file' },
   { name: 'find', args: '<text>', description: 'Search the transcript; n and N jump between matches' },
   { name: 'unqueue', args: '', description: 'Discard prompts queued while a reply was streaming' },
   { name: 'copy', args: '', description: 'Copy the last reply to the system clipboard' },
@@ -206,6 +212,8 @@ class TuiApp {
   private overlay = ''
   private showThinking: boolean
   private confirming = false
+  private confirmPrompt = ''
+  private confirmAction: (() => void) | undefined
   private expandTools = false
   private expandBackground = false
   /** Live agents other than the foreground one, keyed by session id. */
@@ -582,6 +590,7 @@ class TuiApp {
       haveUsage: this.tab.haveUsage,
       contextLimit: this.tab.contextLimit,
       confirming: this.confirming,
+      confirmText: this.confirming ? this.confirmPrompt : undefined,
       searchActive: this.search !== undefined,
     }
   }
@@ -638,8 +647,31 @@ class TuiApp {
   }
 
   private handleConfirmKey(key: Key): void {
+    const action = this.confirmAction
     this.confirming = false
-    this.setStatus(key.name === 'y' || key.name === 'Y' ? 'confirmed' : 'cancelled')
+    this.confirmAction = undefined
+    this.confirmPrompt = ''
+    if (key.name === 'y' || key.name === 'Y') {
+      this.setStatus('confirmed')
+      if (action !== undefined) action()
+    } else {
+      this.setStatus('cancelled')
+    }
+    this.paint()
+  }
+
+  /**
+   * Ask a yes/no question in the composer before a destructive action. Any
+   * key but `y` cancels; the prompt sits in the composer box, where the next
+   * keystroke is guaranteed to land.
+   */
+  private confirm(prompt: string, action: () => void): void {
+    this.confirming = true
+    this.confirmPrompt = prompt
+    this.confirmAction = action
+    this.picker.hide()
+    this.palette.close()
+    this.setStatus('y to confirm · anything else cancels')
     this.paint()
   }
 
@@ -687,6 +719,7 @@ class TuiApp {
           if (item.id === NEW_SESSION_ROW) void this.newSession()
           else this.selectSession(Number.parseInt(item.id, 10))
         }
+        else if (kind === 'delete') this.confirmDelete(item.id, item.title)
         else void this.openSession(item.id, item.title)
         break
       }
@@ -1077,6 +1110,31 @@ class TuiApp {
     this.paint()
   }
 
+  /**
+   * Write the transcript of the active session to a markdown file.
+   *
+   * Without an argument the file lands in the working directory the session
+   * started in, named after the moment: `dsh-transcript-20250101-120000.md`.
+   */
+  private async exportTranscript(requested: string): Promise<void> {
+    const fs = this.ctx.get('fs')
+    const base = fs === undefined ? process.cwd() : fs.processPath(await fs.resolve('.'))
+    const file =
+      requested === ''
+        ? join(base, `dsh-transcript-${timestampForFile()}.md`)
+        : isAbsolute(requested)
+          ? requested
+          : resolve(base, requested)
+    const markdown = transcriptMarkdown(this.tab.messages, this.tab.title)
+    try {
+      await writeFile(file, markdown, 'utf8')
+      this.setStatus(`exported to ${file}`)
+    } catch (error) {
+      this.setStatus(`export failed: ${describeError(error)}`, true)
+    }
+    this.paint()
+  }
+
   /** Show version and connection details in the transcript pane. */
   private showAbout(): void {
     this.showOverlay(
@@ -1238,6 +1296,10 @@ class TuiApp {
         await this.showSessions()
         return
 
+      case 'delete':
+        await this.showSessions('delete')
+        return
+
       case 'sessions':
         this.showOpenSessions()
         return
@@ -1277,6 +1339,10 @@ class TuiApp {
 
       case 'copy':
         this.copyLastReply()
+        return
+
+      case 'export':
+        await this.exportTranscript(rawInput.trim())
         return
 
       case 'about':
@@ -1541,7 +1607,7 @@ class TuiApp {
   }
 
   /** Open the session picker, listing what the query service can see. */
-  private async showSessions(): Promise<void> {
+  private async showSessions(mode: 'resume' | 'delete' = 'resume'): Promise<void> {
     const query = this.ctx.get('sessionQuery') as SessionQueryLike | undefined
     if (query === undefined) {
       this.setStatus('this profile has no session query service', true)
@@ -1557,10 +1623,47 @@ class TuiApp {
         this.paint()
         return
       }
-      this.picker.show('sessions', 'Sessions', rows)
-      this.setStatus('')
+      if (mode === 'delete') {
+        // A session open in a tab must not be pulled out from under it.
+        const open = new Set(this.tabs.map((tab) => tab.id))
+        const deletable = rows.filter((row) => !open.has(row.id))
+        if (deletable.length === 0) {
+          this.setStatus('every stored session is open here — /close one first', true)
+          this.paint()
+          return
+        }
+        this.picker.show('delete', 'Delete a session', deletable)
+        this.setStatus('')
+      } else {
+        this.picker.show('sessions', 'Sessions', rows)
+        this.setStatus('')
+      }
     } catch (error) {
       this.setStatus(describeError(error), true)
+    }
+    this.paint()
+  }
+
+  /** Ask, then remove a stored session from disk for good. */
+  private confirmDelete(id: string, title: string): void {
+    const label = title === '' ? id : title
+    this.confirm(`Delete "${label}" for good?`, () => {
+      void this.performDelete(id, label)
+    })
+  }
+
+  private async performDelete(id: string, label: string): Promise<void> {
+    try {
+      const dir = await findStoredSessionDir(id)
+      if (dir === undefined) {
+        this.setStatus(`no stored session ${label}`, true)
+        this.paint()
+        return
+      }
+      const removed = await deleteStoredSessionDir(dir)
+      this.setStatus(removed ? `deleted ${label}` : `no stored session ${label}`, !removed)
+    } catch (error) {
+      this.setStatus(`delete failed: ${describeError(error)}`, true)
     }
     this.paint()
   }
@@ -1670,6 +1773,15 @@ function relativeTime(epochMillis: number): string {
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`
   return `${Math.floor(seconds / 86400)}d ago`
+}
+
+/** A filesystem-safe timestamp for export file names. */
+function timestampForFile(date = new Date()): string {
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  return (
+    `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}` +
+    `-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
+  )
 }
 
 /**

@@ -85,6 +85,8 @@ export interface Snapshot {
   haveUsage: boolean
   contextLimit: number
   confirming: boolean
+  /** Set while confirming: the yes/no question, drawn in the composer. */
+  confirmText?: string
   /** Whether a `/find` search is open, so its counter outranks the scroll hint. */
   searchActive?: boolean
   /**
@@ -658,13 +660,19 @@ function composerPane(
   const slice = rows.slice(first, first + visibleRows)
 
   const empty = snapshot.composer.value() === ''
+  // A pending yes/no question takes the composer: it is the one place the
+  // next keystroke is guaranteed to land, so the prompt belongs there rather
+  // than in a status line the eye has already left.
+  const question = snapshot.confirmText === undefined ? undefined : `${snapshot.confirmText}  (y/n)`
   // A narrow terminal has to drop the hint before it drops the prompt.
   const placeholder =
-    inner >= 34
-      ? 'Ask the harness…  (/ for commands)'
-      : inner >= 16
-        ? 'Ask the harness…'
-        : '…'
+    question !== undefined && inner >= 12
+      ? truncate(question, inner)
+      : inner >= 34
+        ? 'Ask the harness…  (/ for commands)'
+        : inner >= 16
+          ? 'Ask the harness…'
+          : '…'
   const body = slice.map((row, index) => {
     if (empty && index === 0) {
       return muted(padEnd(truncate(placeholder, inner), inner))
