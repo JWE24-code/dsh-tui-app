@@ -10,6 +10,7 @@
 import { Command } from 'commander'
 import type { Context } from '@deepseek-ai/cordis'
 import { parseCmdline } from '@deepseek-ai/dsh-cmdline'
+import { VERSION } from './version.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'tui-startup'
@@ -41,6 +42,7 @@ function tuiCommand(): Command {
   return new Command()
     .name('dsh --profile tui')
     .description('An interactive terminal client for the Harness.')
+    .version(VERSION, '--version', 'print the app version and exit')
     .helpOption('-h, --help', 'show this help')
     .option('--resume <id>', 'open the persisted session with this id instead of a new one')
     .option('--model <name>', 'model to select for this run')
@@ -56,7 +58,8 @@ Examples:
   dsh --profile tui --resume session-...  reopen an existing session
   dsh --profile tui --thinking            show the reasoner's chain of thought
 
-Inside the app, type / for the command palette and ctrl+c to quit.
+Inside the app, type / for the command palette; press ctrl+c for the sessions
+menu and ctrl+c again within 1.5s to quit.
 `,
     )
 }

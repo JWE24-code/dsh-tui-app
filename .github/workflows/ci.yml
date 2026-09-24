@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      # The render smoke suite is dependency-free: it exercises src/tui/ only,
+      # which imports nothing from the Harness. A full `npm run build` needs
+      # the @deepseek-ai packages linked in via `npm run link-types` first, so
+      # it is intentionally not part of this gate.
+      - run: npm test
+      # The pty harness drives the real Screen through a pseudo-terminal via
+      # util-linux script(1); it skips itself cleanly where that is absent.
+      - run: npm run test:pty
+
+  # Compile the Harness-typed files (src/index.ts, src/startup.ts) against the
+  # real @deepseek-ai packages, which `npm test` never touches because src/tui/
+  # is dependency-free. This is the only gate that catches upstream API drift.
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm install -g @deepseek-ai/dsh
+      - run: npm ci
+      - run: npm run link-types
+      - run: npm run typecheck

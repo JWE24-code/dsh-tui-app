@@ -13,6 +13,9 @@ import { displayWidth, wrap } from './text.ts'
 export const MIN_INPUT_LINES = 1
 export const MAX_INPUT_LINES = 10
 
+/** How many sent prompts the composer history retains. */
+export const HISTORY_LIMIT = 500
+
 /** One turn of the transcript. */
 export interface Message {
   role: 'user' | 'assistant'
@@ -234,6 +237,102 @@ export class Composer {
   height(width: number): number {
     const rows = this.layout(width).length
     return Math.min(Math.max(rows, MIN_INPUT_LINES), MAX_INPUT_LINES)
+  }
+
+  /**
+   * Whether the cursor sits on the first visual row, so `↑` would otherwise be
+   * a no-op — the moment input-history recall should take over.
+   */
+  atFirstRow(width: number): boolean {
+    const first = this.layout(width)[0]
+    return first === undefined || this.cursor <= first.end
+  }
+
+  /** The mirror of {@link atFirstRow} for `↓` and newer history entries. */
+  atLastRow(width: number): boolean {
+    const rows = this.layout(width)
+    const last = rows[rows.length - 1]
+    return last === undefined || this.cursor >= last.start
+  }
+}
+
+/**
+ * Recall of previously sent prompts, the way a shell recalls its history.
+ *
+ * `recall` walks older (`-1`) or newer (`+1`) entries and returns the text to
+ * show, or `undefined` when there is nothing further in that direction — the
+ * caller then falls back to ordinary cursor motion. The draft being typed is
+ * remembered the first time recall leaves it, so walking back down to the end
+ * restores it rather than stranding the user on the last sent prompt.
+ */
+export class InputHistory {
+  private entries: string[] = []
+  /** Position while recalling; `-1` means the live draft, not any entry. */
+  private index = -1
+  private draft = ''
+
+  /** Record a sent prompt, ignoring empties and immediate repeats. */
+  add(text: string): void {
+    const trimmed = text.trim()
+    if (trimmed === '') return
+    if (this.entries[this.entries.length - 1] === trimmed) {
+      this.reset()
+      return
+    }
+    this.entries.push(trimmed)
+    if (this.entries.length > HISTORY_LIMIT) {
+      this.entries.splice(0, this.entries.length - HISTORY_LIMIT)
+    }
+    this.reset()
+  }
+
+  /** Adopt persisted entries (oldest first), keeping the most recent ones. */
+  load(entries: readonly string[]): void {
+    this.entries = entries.filter((entry) => typeof entry === 'string' && entry.trim() !== '')
+    if (this.entries.length > HISTORY_LIMIT) {
+      this.entries = this.entries.slice(this.entries.length - HISTORY_LIMIT)
+    }
+    this.reset()
+  }
+
+  /** Every recorded prompt, oldest first, for persistence. */
+  snapshot(): readonly string[] {
+    return [...this.entries]
+  }
+
+  /**
+   * Walk the history. `draft` is what the composer holds now; it is saved the
+   * first time recall moves away from live typing.
+   */
+  recall(delta: number, draft: string): string | undefined {
+    if (this.entries.length === 0) return undefined
+    if (this.index === -1 && delta < 0) {
+      // Leaving the live draft: remember it so recall(+1) can come back.
+      this.draft = draft
+      this.index = this.entries.length - 1
+      return this.entries[this.index]
+    }
+    if (this.index === -1) return undefined
+    const next = this.index + delta
+    if (next < 0) return undefined
+    if (next >= this.entries.length) {
+      const draft = this.draft
+      this.reset()
+      return draft
+    }
+    this.index = next
+    return this.entries[next]
+  }
+
+  /** Whether a recall is in flight, i.e. ↑/↓ should keep walking history. */
+  isRecalling(): boolean {
+    return this.index !== -1
+  }
+
+  /** Return to live typing; called whenever the composer is edited or sent. */
+  reset(): void {
+    this.index = -1
+    this.draft = ''
   }
 }
 

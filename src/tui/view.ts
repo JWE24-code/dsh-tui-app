@@ -20,7 +20,7 @@ import {
   type SessionSummary,
   type ToolActivity,
 } from './state.ts'
-import { displayWidth, padEnd, truncate, wrap } from './text.ts'
+import { displayWidth, padEnd, stripAnsi, truncate, wrap } from './text.ts'
 import {
   accent,
   bold,
@@ -85,6 +85,14 @@ export interface Snapshot {
   haveUsage: boolean
   contextLimit: number
   confirming: boolean
+  /** Whether a `/find` search is open, so its counter outranks the scroll hint. */
+  searchActive?: boolean
+  /**
+   * Prompts queued while the active session's reply streams, drawn dimmed
+   * under the streaming block. Optional so snapshot builders without a
+   * queue render exactly as before.
+   */
+  queued?: readonly string[]
 }
 
 /** Geometry derived from the terminal size and the current composer height. */
@@ -353,6 +361,21 @@ function transcript(snapshot: Snapshot, width: number): string[] {
     )
     if (running.length > 0) blocks.push(running)
   }
+  const queued = snapshot.queued ?? []
+  if (queued.length > 0) {
+    // Queued prompts borrow the user bar's shape but read as waiting: a
+    // muted marker and dim text, so they are recognizably yours-to-come
+    // rather than already-sent.
+    const bar = muted('▌')
+    const block: string[] = []
+    for (const text of queued) {
+      for (const line of wrap(text.replace(/\s+$/, ''), width - 2)) {
+        block.push(`${bar} ${style(line, { fg: colMuted, dim: true })}`)
+      }
+    }
+    block.push(muted('· queued — sends when the reply finishes'))
+    blocks.push(block)
+  }
   const out: string[] = []
   blocks.forEach((block, index) => {
     if (index > 0) out.push('')
@@ -390,6 +413,24 @@ export function maxScrollBack(snapshot: Snapshot): number {
   const geometry = layout(snapshot)
   const body = bodyLines(snapshot, geometry.contentWidth)
   return Math.max(body.length - geometry.viewportRows, 0)
+}
+
+/**
+ * Lines of the rendered body that contain `query`, case-insensitively.
+ *
+ * Matching runs over the printable text of each line — the styled form is full
+ * of SGR escapes the user never typed — and returns indexes into the same
+ * line array the viewport slices, so a hit can be scrolled to directly.
+ */
+export function findMatches(snapshot: Snapshot, query: string): number[] {
+  const needle = query.trim().toLowerCase()
+  if (needle === '') return []
+  const geometry = layout(snapshot)
+  const hits: number[] = []
+  bodyLines(snapshot, geometry.contentWidth).forEach((line, index) => {
+    if (stripAnsi(line).toLowerCase().includes(needle)) hits.push(index)
+  })
+  return hits
 }
 
 function viewport(snapshot: Snapshot, geometry: Layout): string[] {
@@ -668,7 +709,11 @@ function footer(snapshot: Snapshot, width: number): string {
   if (snapshot.streaming) left = `${accent(snapshot.spinner)} ${left}`
 
   let right = ''
-  if (snapshot.scrollBack > 0) {
+  // A search counter or an error must not be hidden by the scroll indicator —
+  // a match jump leaves the view scrolled, which is exactly when the "no
+  // matches" error and the `match i/n` counter matter most.
+  const outranksScroll = snapshot.statusIsError || snapshot.searchActive === true
+  if (snapshot.scrollBack > 0 && !outranksScroll) {
     // Scrolled away from the newest output: say so, and say how to get back.
     right = style(
       `↑ ${String(snapshot.scrollBack)} line${snapshot.scrollBack === 1 ? '' : 's'}  ·  ctrl+g newest`,
@@ -678,7 +723,7 @@ function footer(snapshot: Snapshot, width: number): string {
     const clipped = truncate(snapshot.status, Math.max(Math.floor(width / 2), 10))
     right = snapshot.statusIsError ? warn(clipped) : ok(clipped)
   } else if (snapshot.picker.kind === 'none' && !snapshot.palette.open) {
-    right = muted('/ commands  ·  ctrl+c quit')
+    right = muted('/ commands  ·  ? help  ·  ctrl+c menu')
   }
 
   const gap = width - displayWidth(left) - displayWidth(right)
@@ -737,22 +782,31 @@ export function render(snapshot: Snapshot): {
 export const HELP_TEXT = [
   '**Keys**',
   '',
-  '- `enter` — send · `ctrl+j` — newline',
+  '- `enter` — send · queues while a reply streams · `ctrl+j` — newline',
+  '- `↑` / `↓` on the first / last row — recall earlier prompts',
   '- `/` — command palette · `tab` accept · `esc` dismiss',
   '- `esc` — interrupt a reply while it is streaming',
+  '- `enter` while streaming queues the prompt · `/unqueue` discards it',
   '- `ctrl+n` — new session · `ctrl+r` — resume · `ctrl+t` — toggle thinking',
   '- `pgup` / `pgdn` — page · `ctrl+u` / `ctrl+d` — half page',
   '- `shift+↑` / `shift+↓` — one line · `ctrl+g` — back to newest',
   '- `ctrl+o` — expand or collapse tool calls · `ctrl+x` — compact the session',
   '- `ctrl+b` — show what the background agents are doing',
+  '- `ctrl+y` — copy the last reply to the clipboard',
+  '- `?` — open this help on an empty composer',
   '',
   '**Sessions**',
   '',
   '- `ctrl+n` — open another session · `alt+1`…`alt+9` — jump to one',
-  '- `alt+n` / `alt+p` — next / previous · `/sessions` — pick, or start one',
+  '- `alt+n` / `alt+p` / `tab` — cycle · `/sessions` — pick, or start one',
   '- `/close` — close this one · a finished session rings the bell and marks ●',
   '- `ctrl+a` / `ctrl+e` — start / end of line · `ctrl+w` — delete word',
-  '- `ctrl+c` — quit',
+  '- `ctrl+c` — sessions menu · again within 1.5s — quit',
+  '',
+  '**Searching**',
+  '',
+  '- `/find <text>` — search the transcript · `esc` clears the search first',
+  '- `n` / `N` (with an empty composer) — next / previous match',
   '',
   '**In a list** (`/model`, `/resume`)',
   '',

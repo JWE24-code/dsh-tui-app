@@ -1,0 +1,182 @@
+/**
+ * PTY-driven integration test for the terminal layer.
+ *
+ * node has no pty builtin and npm install is blocked, so this driver uses
+ * util-linux `script(1)` to allocate a pseudo-terminal and run the subject
+ * (tests/pty-subject.ts) under it. Keystrokes written to the child's stdin
+ * flow through the pty to the subject exactly as a human's would; the
+ * subject's output (real frames painted by Screen + render) is accumulated
+ * and asserted on.
+ *
+ * Because the loop runs under a pty, the usual byte-equality tricks do not
+ * work (the tty may echo early input and converts \n to \r\n): assertions
+ * are made on printable content after ANSI-stripping, which is robust.
+ *
+ * Run with: npm run test:pty   (or: node --experimental-strip-types tests/pty.ts)
+ */
+
+import { spawn, type ChildProcess } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { resolve } from 'node:path'
+
+import { stripAnsi, displayWidth } from '../src/tui/text.ts'
+
+const ROOT = resolve(import.meta.dirname, '..')
+const SUBJECT = 'tests/pty-subject.ts'
+
+const ALT_ON = '\x1b[?1049h'
+const ALT_OFF = '\x1b[?1049l'
+
+// ---------------------------------------------------------------- utilities
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((done) => setTimeout(done, ms))
+}
+
+function which(bin: string): boolean {
+  const paths = (process.env.PATH ?? '').split(':')
+  return paths.some((dir) => dir !== '' && existsSync(resolve(dir, bin)))
+}
+
+/** A painted row starts with moveTo(row,1) + clear-to-eol from Screen.paint. */
+const PAINTED_ROW = /\x1b\[\d+;1H\x1b\[K/
+
+/**
+ * Every printable painted-line width in the captured output, in order.
+ * Splitting on the row-repaint prefix recovers the frame lines even though
+ * the pty never emits a newline between them.
+ */
+function paintedWidths(output: string): number[] {
+  return output
+    .split(PAINTED_ROW)
+    .map((segment) => displayWidth(stripAnsi(segment).replace(/[\r\n]/g, '')))
+}
+
+// ------------------------------------------------------------------ the run
+
+let checks = 0
+function check(label: string, condition: boolean): void {
+  if (!condition) throw new Error(`failed: ${label}`)
+  checks += 1
+}
+
+async function main(): Promise<void> {
+  if (!which('script')) {
+    console.log('skipped: no script(1)')
+    return
+  }
+
+  const child: ChildProcess = spawn(
+    'script',
+    ['-qec', `stty cols 80 rows 30 && node --experimental-strip-types ${SUBJECT}`, '/dev/null'],
+    { cwd: ROOT, stdio: ['pipe', 'pipe', 'pipe'] },
+  )
+
+  let output = ''
+  // stdio is 'pipe' on all three fds, so these are present; the guard keeps
+  // strict mode convinced without a non-null assertion.
+  const { stdout, stderr } = child
+  if (stdout === null || stderr === null) {
+    throw new Error('script(1) did not expose piped stdio')
+  }
+  stdout.on('data', (chunk: Buffer) => {
+    output += chunk.toString('utf8')
+  })
+  stderr.on('data', (chunk: Buffer) => {
+    output += chunk.toString('utf8')
+  })
+
+  let exitCode: number | null = null
+  child.on('exit', (code: number | null) => {
+    exitCode = code
+  })
+
+  // Overall watchdog: kill a hung subject and fail.
+  const watchdog = setTimeout(() => {
+    child.kill('SIGKILL')
+  }, 15_000)
+
+  function write(input: string): void {
+    child.stdin?.write(input)
+  }
+
+  /** Wait until the accumulated output satisfies the predicate. */
+  async function until(ready: (text: string) => boolean, ms = 5_000): Promise<boolean> {
+    const deadline = Date.now() + ms
+    while (Date.now() < deadline) {
+      if (ready(output)) return true
+      if (exitCode !== null) return ready(output)
+      await sleep(25)
+    }
+    return ready(output)
+  }
+
+  const alive = (): boolean => exitCode === null
+
+  try {
+    // (a) the subject enters the alternate screen.
+    check('alternate screen is entered', await until((t) => t.includes(ALT_ON)))
+    const paintedFrom = output.indexOf(ALT_ON)
+
+    // (f) a split escape sequence must not crash or paint garbage: a raw ESC
+    // byte, a 50ms pause, then the rest of the arrow-up sequence.
+    write('\x1b')
+    await sleep(50)
+    write('[A')
+    await sleep(300)
+    check('a split escape does not crash the subject', alive())
+    const afterSplit = output.length
+    check(
+      'a split escape paints no garbage',
+      stripAnsi(output.slice(afterSplit)).replace(/[\r\n]/g, '').trim() === '',
+    )
+
+    // (b) typed text reaches the composer and is painted (the subject disables
+    // tty echo via raw mode, so this really is the painted frame).
+    write('hello world')
+    check('typed text is painted', await until((t) => stripAnsi(t.slice(paintedFrom)).includes('hello world')))
+
+    // (c) no painted line ever exceeds 80 printable columns.
+    check(
+      'painted lines never exceed 80 columns',
+      paintedWidths(output).every((width) => width <= 80),
+    )
+
+    // (d) enter clears the composer (the placeholder is repainted) and the
+    // text reappears as a transcript turn (the accent bar row).
+    const beforeEnter = output.length
+    write('\r')
+    check(
+      'enter restores the composer placeholder',
+      await until((t) => stripAnsi(t.slice(beforeEnter)).includes('Ask the harness')),
+    )
+    check(
+      'the sent text reappears as a transcript turn',
+      stripAnsi(output.slice(beforeEnter)).includes('▌') &&
+        stripAnsi(output.slice(beforeEnter)).includes('hello world'),
+    )
+
+    // (e) a single ctrl+c does NOT exit...
+    write('\x03')
+    await sleep(400)
+    check('a single ctrl+c does not exit', alive())
+    check('no premature teardown after one ctrl+c', !output.includes(ALT_OFF) && !output.includes('SUBJECT-DONE'))
+
+    // ...but a second ctrl+c within the 1.5s window exits cleanly.
+    write('\x03')
+    check('the subject exits on the second ctrl+c', await until(() => exitCode !== null, 5_000))
+    check('the exit code is zero', exitCode === 0)
+    check('the alternate screen is left', output.includes(ALT_OFF))
+    check('the subject reports a clean done line', /SUBJECT-DONE 1/.test(stripAnsi(output)))
+  } finally {
+    clearTimeout(watchdog)
+    if (alive()) child.kill('SIGKILL')
+  }
+
+  console.log(`ok - ${String(checks)} checks passed`)
+}
+
+main().catch((error: unknown) => {
+  console.error(String(error))
+  process.exit(1)
+})

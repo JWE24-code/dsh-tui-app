@@ -1,0 +1,73 @@
+# Changelog
+
+All notable changes to `dsh-tui-app` are documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
+adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+
+- **Message queueing** — enter while a reply streams queues the prompt instead
+  of rejecting it: queued prompts render as dimmed user turns under the
+  streaming block, send themselves in order when the turn finishes without an
+  interrupt (per session, tab-switch safe), and `/unqueue` discards them.
+- **Pty integration harness** — `npm run test:pty` drives the real `Screen`,
+  key decoder, and frame renderer through an actual pseudo-terminal with
+  scripted keystrokes: raw mode, the alternate screen, split escape sequences,
+  and the two-step ctrl+c are now proven by a round trip. Runs in CI; skips
+  itself where util-linux `script(1)` is absent.
+- **Composer input history** — press `↑` / `↓` on the composer's outer rows to
+  recall previously sent prompts, shell-style, with the in-progress draft
+  restored on the way back down.
+- **Transcript search** — `/find <text>` searches the whole conversation;
+  `n` / `N` (on an empty composer) jump between matches, `esc` clears. Matches
+  scroll into view centered, with a `match i/n` counter in the status bar.
+- **Copy to clipboard** — `/copy` or `ctrl+y` yanks the last reply over the
+  OSC 52 escape, so it works in a plain terminal, over SSH, and inside tmux
+  with no external dependency. Long answers are truncated to the terminal's
+  usual payload ceiling.
+- **Persistence** — sent prompts and the thinking preference now survive a
+  restart, stored at `$DSH_HOME/tui-state.json` (atomic write, best-effort).
+- **`--version`** flag and a **`/about`** command reporting version, profile,
+  host, and the model in use.
+- **`?` help hint** — pressing `?` on an empty composer opens the key
+  reference, matching the footer hint.
+- **CI** — a GitHub Actions workflow runs the dependency-free render smoke
+  suite on every push and pull request.
+- **LICENSE** — the MIT grant now exists as a real `LICENSE` file rather than
+  a README line, so GitHub reports the license and the grant is enforceable.
+- **Stream-projection test** — the chunk→transcript switch moved out of
+  `index.ts` into a dependency-free `src/tui/stream.ts`, and
+  `tests/stream-smoke.ts` replays a synthetic reply (reasoning, text, a
+  two-delta tool call, a settled block, usage, and unknown frames) against it,
+  closing the last unproven path — the live-reply projection — at the logic
+  level.
+- **CI typecheck job** — a second workflow job installs `@deepseek-ai/dsh`,
+  links its types, and runs `typecheck`, so the Harness-typed files
+  (`src/index.ts`, `src/startup.ts`) are compiled against the real packages on
+  every push instead of only locally.
+- **`test:pty` folded into `npm test`** — the pty round trip now runs as part
+  of the default suite (it skips itself where `script(1)` is absent), so local
+  and CI runs no longer diverge.
+
+### Changed
+
+- **Two-step `ctrl+c`** — the first press opens the sessions menu instead of
+  quitting; a second press within 1.5 seconds exits. A stray ctrl+c no longer
+  throws away the whole session.
+
+### Fixed
+
+- **Model choice is per session.** Every Agent used to share one selection
+  ref, so `/model` in one conversation silently rerouted all the others. Each
+  session now owns its ref (plus its footer model label and context budget);
+  new sessions inherit the model of the session they were opened from and
+  diverge independently.
+
+## [0.1.0] - initial
+
+- opencode-style terminal app for DeepSeek Harness: bordered composer, live
+  token counter, slash palette, markdown transcript with syntax-highlighted
+  code, multi-session tabs, background-agent strip, and a tailnet web UI
+  helper.

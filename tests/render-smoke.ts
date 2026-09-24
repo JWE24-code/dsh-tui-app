@@ -14,6 +14,8 @@ import assert from 'node:assert/strict'
 
 import {
   Composer,
+  HISTORY_LIMIT,
+  InputHistory,
   Palette,
   Picker,
   formatTokens,
@@ -25,6 +27,7 @@ import { renderMarkdown } from '../src/tui/markdown.ts'
 import { decode } from '../src/tui/keys.ts'
 import {
   HELP_TEXT,
+  findMatches,
   hostLabel,
   layout,
   maxScrollBack,
@@ -74,6 +77,27 @@ check('end goes to the line end', composer.position() === 7)
 check('composer height grows with lines', composer.height(40) === 2)
 composer.reset()
 check('reset empties the buffer', composer.value() === '')
+
+// ------------------------------------------------------------- input history
+
+const history = new InputHistory()
+check('recall on empty history yields nothing', history.recall(-1, 'draft') === undefined)
+history.add('first prompt')
+history.add('second prompt')
+history.add('second prompt') // immediate repeat, dropped
+check('recall ignores immediate repeats', history.snapshot().length === 2)
+check('recall walks back to the newest', history.recall(-1, '') === 'second prompt')
+check('recall walks back to the oldest', history.recall(-1, '') === 'first prompt')
+check('recall stops at the oldest', history.recall(-1, '') === undefined)
+check('recall walks forward again', history.recall(1, '') === 'second prompt')
+const recallDraft = new InputHistory()
+recallDraft.add('one')
+recallDraft.add('two')
+check('the live draft is remembered', recallDraft.recall(-1, 'unfinished draft') === 'two')
+check('walking back down restores the draft', recallDraft.recall(1, '') === 'unfinished draft')
+const loaded = new InputHistory()
+loaded.load(['a', '', 'b', 'a'])
+check('load drops blanks and keeps order', loaded.snapshot().join(',') === 'a,b,a')
 
 // ------------------------------------------------------------------- palette
 
@@ -584,6 +608,27 @@ const cramped = layout(snapshot({ rows: 8, background: agents, expandBackground:
 check('a cramped window collapses the strip', cramped.backgroundRows === 1)
 check('a cramped window keeps a usable transcript', cramped.viewportRows >= 3)
 
+// ------------------------------------------------------------------ search
+
+{
+  const searchable = snapshot({
+    rows: 20,
+    messages: [
+      { role: 'assistant', content: 'Here is the answer with a **keyword**.' },
+      { role: 'user', content: 'then the keyword again' },
+    ],
+  })
+  const hits = findMatches(searchable, 'keyword')
+  check('search finds every matching body line', hits.length === 2)
+  check('search is case-insensitive', findMatches(searchable, 'KEYWORD').length === 2)
+  check('search returns nothing on a miss', findMatches(searchable, 'absent').length === 0)
+  check('search ignores a blank query', findMatches(searchable, '   ').length === 0)
+  check('search works over streaming text', findMatches(
+    snapshot({ messages: [], streaming: true, streamingText: 'a live needle streams' }),
+    'needle',
+  ).length === 1)
+}
+
 // ------------------------------------------------------------ terminal size
 
 // A pty opened without a window size reports 0, not undefined, and a zero-size
@@ -598,6 +643,117 @@ check('one bad axis falls back alone', normalizeSize(0, 50).columns === 80 && no
 // The fallback geometry must itself produce a legal frame.
 const fallback = normalizeSize(0, 0)
 assertFrame('fallback size', snapshot({ columns: fallback.columns, rows: fallback.rows }))
+
+// ------------------------------------------------- input history hardening
+
+const blanks = new InputHistory()
+blanks.add('')
+blanks.add('   ')
+blanks.add('\t')
+check('add ignores empty and whitespace prompts', blanks.snapshot().length === 0)
+blanks.add('  padded  ')
+check('add trims before recording', blanks.snapshot().join(',') === 'padded')
+check('recall forward from live typing yields nothing', blanks.recall(1, 'draft') === undefined)
+
+const resend = new InputHistory()
+resend.add('alpha')
+resend.add('beta')
+check('recall reaches the newest after sends', resend.recall(-1, '') === 'beta')
+resend.add('gamma')
+check('sending resets the recall position', resend.recall(-1, '') === 'gamma')
+
+// The draft save/restore state machine: leave the draft, walk to the oldest,
+// come back past the newest, and leave a second draft.
+const machine = new InputHistory()
+machine.add('one')
+machine.add('two')
+check('leaving the live draft saves it', machine.recall(-1, 'draft A') === 'two')
+check('the oldest is reachable from a saved draft', machine.recall(-1, '') === 'one')
+check('recall steps forward through entries', machine.recall(1, '') === 'two')
+check('returning past the newest restores the draft', machine.recall(1, '') === 'draft A')
+check('restoring the draft returns to live typing', machine.recall(1, '') === undefined)
+check('a fresh draft is saved on the next recall', machine.recall(-1, 'draft B') === 'two')
+check('the fresh draft restores too', machine.recall(1, '') === 'draft B')
+
+// Bounds: load caps at the limit and keeps the most recent entries.
+const capped = new InputHistory()
+capped.load(Array.from({ length: HISTORY_LIMIT + 3 }, (_, index) => `e${String(index)}`))
+check('load caps the history at the limit', capped.snapshot().length === HISTORY_LIMIT)
+check('load keeps the most recent entries', capped.snapshot()[0] === 'e3')
+const nonStrings = new InputHistory()
+nonStrings.load(['a', 5 as unknown as string, null as unknown as string, 'b'])
+check('load drops non-string entries', nonStrings.snapshot().join(',') === 'a,b')
+
+// ------------------------------------------------ composer row boundaries
+
+const rowProbe = new Composer()
+check('an empty composer is on the first row', rowProbe.atFirstRow(40))
+check('an empty composer is also on the last row', rowProbe.atLastRow(40))
+rowProbe.setValue('single row')
+check('a one-row buffer is the first row', rowProbe.atFirstRow(40))
+check('a one-row buffer is also the last row', rowProbe.atLastRow(40))
+
+const multi = new Composer()
+multi.setValue('one\ntwo\nthree')
+multi.toStart()
+check('the cursor starts on the first row only', multi.atFirstRow(40) && !multi.atLastRow(40))
+multi.toEnd()
+check('the cursor ends on the last row only', multi.atLastRow(40) && !multi.atFirstRow(40))
+multi.home()
+multi.moveRow(-1, 40)
+check('a middle row is neither first nor last', !multi.atFirstRow(40) && !multi.atLastRow(40))
+
+// A single logical line that wraps must behave like multiple rows.
+const wrappedRow = new Composer()
+wrappedRow.setValue('aaaaaaaaaa bbbbbbbbbb')
+wrappedRow.toStart()
+check('a wrapped buffer starts on the first row only', wrappedRow.atFirstRow(10) && !wrappedRow.atLastRow(10))
+wrappedRow.toEnd()
+check('a wrapped buffer ends on the last row only', wrappedRow.atLastRow(10) && !wrappedRow.atFirstRow(10))
+
+// ------------------------------------------------------ search hardening
+
+{
+  const searchable = snapshot({
+    messages: [
+      { role: 'user', content: 'needle one' },
+      { role: 'assistant', content: 'no match here' },
+      { role: 'user', content: 'needle two' },
+    ],
+  })
+  check('an empty query matches nothing', findMatches(searchable, '').length === 0)
+  const hits = findMatches(searchable, 'needle')
+  check('match indexes ascend', hits.every((hit, index) => index === 0 || (hits[index - 1] ?? 0) < hit))
+  const overlaid = snapshot({ overlay: 'the overlay hides a needle', messages: [] })
+  check('search runs over the overlay', findMatches(overlaid, 'needle').length === 1)
+}
+
+// ------------------------------------------------- help and footer claims
+
+check(
+  'help documents the ctrl+c two-step',
+  HELP_TEXT.includes('`ctrl+c` — sessions menu · again within 1.5s — quit'),
+)
+const helpClaim = render(snapshot({ overlay: HELP_TEXT })).lines.map((line) => stripAnsi(line))
+check(
+  'the help overlay renders the ctrl+c two-step',
+  helpClaim.some((line) => line.includes('sessions menu')) &&
+    helpClaim.some((line) => line.includes('again within 1.5s — quit')),
+)
+check(
+  'the footer default hint says ctrl+c menu',
+  stripAnsi(normal[normal.length - 1] ?? '').includes('ctrl+c menu'),
+)
+const busyStatus = assertFrame('busy status', snapshot({ status: 'working on it' })).map((line) =>
+  stripAnsi(line),
+)
+check('a status displaces the footer hint', !busyStatus.some((line) => line.includes('ctrl+c menu')))
+const scrolledHint = render({ ...tall, scrollBack: 2 }).lines.map((line) => stripAnsi(line))
+check(
+  'scrolling displaces the footer hint',
+  !scrolledHint.some((line) => line.includes('ctrl+c menu')) &&
+    scrolledHint.some((line) => line.includes('ctrl+g newest')),
+)
 
 // eslint-disable-next-line no-console
 console.log(`ok - ${String(checks)} checks passed`)

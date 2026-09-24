@@ -1,0 +1,109 @@
+/**
+ * Pure projection of a Harness assistant-stream chunk onto the transcript.
+ *
+ * `TuiApp.onFrame` used to hold this switch inline, which made the one path
+ * that turns a live model reply into visible text untestable without a full
+ * Harness runtime. This module keeps the identical logic but depends on
+ * nothing: it imports no Harness types and no npm packages, so a synthetic
+ * chunk sequence can be replayed in a dependency-free test (see
+ * `tests/stream-smoke.ts`) the same way `render-smoke.ts` exercises `view.ts`.
+ *
+ * @module dsh-tui-app/tui/stream
+ */
+
+import type { ToolActivity } from './state.ts'
+
+/**
+ * The mutable streaming surface a chunk projects onto — a structural subset of
+ * the app's session tab, so the function works on the real tab or a test stub
+ * with no Harness types in sight.
+ */
+export interface StreamingSurface {
+  streamingText: string
+  streamingReasoning: string
+  streamingTools: ToolActivity[]
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+  haveUsage: boolean
+}
+
+/**
+ * Structural view of a Harness `StreamChunk`, carrying only the fields the TUI
+ * renders. It is deliberately wide (every field optional) so the real union —
+ * whose variants carry `index`, `argumentsDelta`, `reason`, etc. — assigns to
+ * it without a cast, and unknown future chunk kinds fall through the default.
+ */
+export interface StreamChunkLike {
+  type: string
+  text?: string
+  id?: string | number
+  name?: string
+  usage?: { inputTokens: number; outputTokens: number; totalTokens?: number }
+  block?: { type: string; id?: string | number; name?: string }
+  /** Rendered fields the union carries but this app ignores. */
+  index?: number
+  argumentsDelta?: string
+  blockType?: unknown
+  reason?: unknown
+  replayState?: unknown
+}
+
+/**
+ * Apply one stream chunk to a streaming surface, mutating it in place.
+ *
+ * Mirrors `onFrame` exactly: `text-delta` and `reasoning-delta` append, a
+ * `tool-call-delta` adds or names a running tool row keyed by call id,
+ * `usage` lands the token counters, and `block-end` settles the matching row
+ * to `ok`. Unknown chunk kinds are ignored on purpose — the chunk union is
+ * merge-extensible and a plugin may emit one this app has never heard of.
+ */
+export function projectStreamChunk(surface: StreamingSurface, chunk: StreamChunkLike): void {
+  switch (chunk.type) {
+    case 'text-delta':
+      surface.streamingText += chunk.text ?? ''
+      break
+    case 'reasoning-delta':
+      surface.streamingReasoning += chunk.text ?? ''
+      break
+    case 'tool-call-delta': {
+      // The name arrives on the first delta of a call and is omitted on the
+      // argument deltas that follow, so the call id is what identifies a row.
+      const id = String(chunk.id)
+      const existing = surface.streamingTools.find((tool) => tool.id === id)
+      if (existing === undefined) {
+        surface.streamingTools.push({ id, name: chunk.name ?? 'tool', status: 'running' })
+      } else if (chunk.name !== undefined && existing.name === 'tool') {
+        existing.name = chunk.name
+      }
+      break
+    }
+    case 'usage': {
+      const usage = chunk.usage
+      if (usage === undefined) break
+      surface.promptTokens = usage.inputTokens
+      surface.completionTokens = usage.outputTokens
+      surface.totalTokens = usage.totalTokens ?? usage.inputTokens + usage.outputTokens
+      surface.haveUsage = true
+      break
+    }
+    case 'block-end': {
+      // A settled tool-call block flips its row from running to done and fills
+      // in the name the deltas may have omitted.
+      const block = chunk.block
+      if (block === undefined || block.type !== 'tool-call') break
+      const row =
+        surface.streamingTools.find((tool) => tool.id === String(block.id)) ??
+        surface.streamingTools.find((tool) => tool.name === block.name)
+      if (row === undefined) {
+        surface.streamingTools.push({ id: String(block.id), name: block.name ?? 'tool', status: 'ok' })
+      } else {
+        row.name = block.name ?? row.name
+        row.status = 'ok'
+      }
+      break
+    }
+    default:
+      break
+  }
+}

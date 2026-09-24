@@ -18,7 +18,6 @@ import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type { Agent, AssistantStreamFrame, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import type { StreamChunk } from '@deepseek-ai/dsh-llm'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
 import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
@@ -28,6 +27,7 @@ import { Screen } from './tui/screen.ts'
 import type { Key } from './tui/keys.ts'
 import {
   Composer,
+  InputHistory,
   Palette,
   Picker,
   type Message,
@@ -38,7 +38,18 @@ import {
   type SessionSummary,
   type ToolActivity,
 } from './tui/state.ts'
-import { HELP_TEXT, hostLabel, layout, maxScrollBack, render, type Snapshot } from './tui/view.ts'
+import {
+  HELP_TEXT,
+  findMatches,
+  hostLabel,
+  layout,
+  maxScrollBack,
+  render,
+  type Snapshot,
+} from './tui/view.ts'
+import { projectStreamChunk } from './tui/stream.ts'
+import { loadState, saveStateSync, type PersistedState } from './persist.ts'
+import { VERSION } from './version.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'dsh-tui-app'
@@ -79,6 +90,9 @@ const DEFAULT_CONTEXT_LIMIT = 65536
 /** How often the spinner advances while a reply streams, in milliseconds. */
 const SPINNER_INTERVAL = 80
 
+/** A second ctrl+c within this window quits; outside it the timer resets. */
+const QUIT_CONFIRM_MS = 1500
+
 /** Commands this app implements itself, on top of whatever the Harness adds. */
 const BUILTIN_COMMANDS: readonly PaletteCommand[] = [
   { name: 'new', args: '', description: 'Open another session alongside this one' },
@@ -88,6 +102,10 @@ const BUILTIN_COMMANDS: readonly PaletteCommand[] = [
   { name: 'model', args: '[name]', description: 'Switch model; no argument lists them' },
   { name: 'thinking', args: '', description: "Toggle display of the reasoner's chain-of-thought" },
   { name: 'tools', args: '', description: 'List the tools this agent can call' },
+  { name: 'find', args: '<text>', description: 'Search the transcript; n and N jump between matches' },
+  { name: 'unqueue', args: '', description: 'Discard prompts queued while a reply was streaming' },
+  { name: 'copy', args: '', description: 'Copy the last reply to the system clipboard' },
+  { name: 'about', args: '', description: 'Show version and connection information' },
   { name: 'help', args: '', description: 'Show keys and commands' },
   { name: 'exit', args: '', description: 'Quit dsh' },
 ]
@@ -115,8 +133,22 @@ interface SessionTab {
   totalTokens: number
   haveUsage: boolean
   scrollBack: number
+  /**
+   * Prompts entered while a reply was streaming. They wait here until the
+   * turn finishes without an interrupt, then send themselves in order.
+   */
+  queued: string[]
   /** `ready` means a turn finished and you have not looked since. */
   status: SessionStatus
+  /**
+   * This session's own model selection. Each Agent gets the ref of the tab
+   * that created it, so `/model` in one conversation never reroutes another.
+   */
+  selection: ModelSelectionRef
+  /** Label of the model this session is using, for the footer and /about. */
+  modelName: string
+  /** Context capacity resolved for this session's model. */
+  contextLimit: number
 }
 
 /** Create an empty session record. */
@@ -136,7 +168,11 @@ function newTab(id: string): SessionTab {
     totalTokens: 0,
     haveUsage: false,
     scrollBack: 0,
+    queued: [],
     status: 'idle',
+    selection: { current: undefined, assembled: undefined },
+    modelName: '',
+    contextLimit: 0,
   }
 }
 
@@ -174,25 +210,20 @@ class TuiApp {
   private expandBackground = false
   /** Live agents other than the foreground one, keyed by session id. */
   private readonly background = new Map<string, BackgroundAgent>()
-  /** Context capacity of the active model, resolved from the provider. */
-  private contextLimit = 0
 
+  /** Sent prompts, recalled with ↑/↓ on the composer's outer rows. */
+  private readonly history = new InputHistory()
+  /** The active transcript search, if `/find` has been run and not cleared. */
+  private search: { query: string; cursor: number } | undefined
+  /** Persisted state as last loaded or saved, and a write debounce. */
+  private persisted: PersistedState = { inputHistory: [], thinking: false }
+  private persistTimer: NodeJS.Timeout | undefined
 
-  private modelName = ''
   private abort: AbortController | undefined
   private disposers: (() => void)[] = []
   private stopped = false
-
-  /**
-   * The live model selection, shared with every Agent this app creates.
-   *
-   * `installModelSelection` couples this exact object to Agent-scoped prompt
-   * assembly and request routing, and the Agent re-reads `current` when each
-   * step enters assembly. Switching model is therefore a mutation of this ref,
-   * not a new Agent: re-resolving the Agent does not change a live one's
-   * routing, which is why an earlier attempt only moved the status-bar label.
-   */
-  private readonly selection: ModelSelectionRef = { current: undefined, assembled: undefined }
+  /** Epoch millis of the last ctrl+c that armed the quit confirmation. */
+  private lastQuitRequest = 0
 
   private readonly ctx: Context
   private readonly config: Config
@@ -221,14 +252,19 @@ class TuiApp {
     const defaultModel = this.ctx.get('agentDefaultModel')
     if (agents === undefined || defaultModel === undefined) return
 
-    const selection = defaultModel.currentSelection()
-    this.selection.current =
-      this.config.model === undefined ? selection : { ...selection, model: this.config.model }
-    const current = this.selection.current
-    const agentOptions = { provider: current.provider, model: current.model }
-    this.modelName = String(current.model)
+    // Adopt whatever survived the last run before deciding what to show: the
+    // composer history and the thinking preference, both best-effort.
+    this.persisted = await loadState()
+    this.history.load(this.persisted.inputHistory)
+    if (this.config.thinking === undefined) this.showThinking = this.persisted.thinking
 
-    const setup = this.installSelection
+    const selection = defaultModel.currentSelection()
+    this.tab.selection.current =
+      this.config.model === undefined ? selection : { ...selection, model: this.config.model }
+    const current = this.tab.selection.current
+    const agentOptions = { provider: current.provider, model: current.model }
+    this.tab.modelName = String(current.model)
+    const setup = this.selectionSetupFor(this.tab)
 
     const fs = this.ctx.get('fs')
     const cwd = fs === undefined ? process.cwd() : fs.processPath(await fs.resolve('.'))
@@ -263,12 +299,18 @@ class TuiApp {
   }
 
   /**
-   * Agent setup: couple the shared selection ref to the new Agent's context.
-   * Every Agent this app creates gets the same ref, so a model chosen in one
-   * session is still in force in the next one.
+   * Agent setup for one session: couples that tab's own selection ref to the
+   * new Agent's context. `installModelSelection` binds this exact object to
+   * Agent-scoped prompt assembly and request routing, and the Agent re-reads
+   * `current` when each step enters assembly — so a model switch is a
+   * mutation of the tab's ref, and every tab mutates only its own. Handing
+   * every Agent the same ref (the previous design) is exactly how a switch in
+   * one session silently rerouted all the others.
    */
-  private readonly installSelection = (agentCtx: Context): void => {
-    installModelSelection(agentCtx, this.selection)
+  private selectionSetupFor(tab: SessionTab): (agentCtx: Context) => void {
+    return (agentCtx: Context): void => {
+      installModelSelection(agentCtx, tab.selection)
+    }
   }
 
   /** Tear the terminal down and release every subscription. */
@@ -276,6 +318,7 @@ class TuiApp {
     if (this.stopped) return
     this.stopped = true
     this.stopSpinner()
+    this.persistNow()
     for (const dispose of this.disposers) {
       try {
         dispose()
@@ -359,89 +402,47 @@ class TuiApp {
   }
 
   /**
-   * Apply one stream frame. `start` and `end` carry no chunk; unknown chunk
-   * kinds are ignored on purpose, because the union is merge-extensible and a
-   * plugin may add one this app has never heard of.
+   * Apply one stream frame. `start` and `end` carry no chunk; the projection
+   * lives in `tui/stream.ts` so it is replayable without a Harness runtime.
+   * Unknown chunk kinds are ignored on purpose, because the union is
+   * merge-extensible and a plugin may add one this app has never heard of.
    */
   private onFrame(tab: SessionTab, frame: AssistantStreamFrame): void {
     if (frame.type !== 'chunk') return
-    const chunk: StreamChunk = frame.chunk
-    switch (chunk.type) {
-      case 'text-delta':
-        tab.streamingText += chunk.text
-        break
-      case 'reasoning-delta':
-        tab.streamingReasoning += chunk.text
-        break
-      case 'tool-call-delta': {
-        // The name arrives on the first delta of a call and is omitted on the
-        // argument deltas that follow, so the call id is what identifies a row.
-        const id = String(chunk.id)
-        const existing = tab.streamingTools.find((tool) => tool.id === id)
-        if (existing === undefined) {
-          tab.streamingTools.push({ id, name: chunk.name ?? 'tool', status: 'running' })
-        } else if (chunk.name !== undefined && existing.name === 'tool') {
-          existing.name = chunk.name
-        }
-        break
-      }
-      case 'usage':
-        tab.promptTokens = chunk.usage.inputTokens
-        tab.completionTokens = chunk.usage.outputTokens
-        tab.totalTokens = chunk.usage.totalTokens ?? chunk.usage.inputTokens + chunk.usage.outputTokens
-        tab.haveUsage = true
-        break
-      case 'block-end': {
-        // A settled tool-call block flips its row from running to done and
-        // fills in the name the deltas may have omitted.
-        if (chunk.block.type !== 'tool-call') break
-        const block = chunk.block
-        const row =
-          tab.streamingTools.find((tool) => tool.id === String(block.id)) ??
-          tab.streamingTools.find((tool) => tool.name === block.name)
-        if (row === undefined) {
-          tab.streamingTools.push({ id: String(block.id), name: block.name, status: 'ok' })
-        } else {
-          row.name = block.name
-          row.status = 'ok'
-        }
-        break
-      }
-      default:
-        break
-    }
+    projectStreamChunk(tab, frame.chunk)
     if (tab === this.tabs[this.active]) this.paint()
   }
 
   /**
-   * Set the context budget the footer measures against.
+   * Set the context budget the footer measures against, for one session.
    *
-   * An explicit --context-limit wins; otherwise the provider's own capacity for
-   * the exact model is used, so the bar reflects the model actually answering
-   * (GLM-5.3 is 200K, not the 64K a hardcoded default would show). A provider
-   * that does not publish a capacity falls back to the flag's default.
+   * An explicit --context-limit wins; otherwise the provider's own capacity
+   * for that session's exact model is used, so the bar reflects the model
+   * actually answering (GLM-5.3 is 200K, not the 64K a hardcoded default
+   * would show). A provider that does not publish a capacity falls back to
+   * the flag's default.
    */
-  private async refreshContextLimit(): Promise<void> {
+  private async refreshContextLimit(tab: SessionTab = this.tab): Promise<void> {
     if (this.config.contextLimit !== undefined) {
-      this.contextLimit = this.config.contextLimit
+      tab.contextLimit = this.config.contextLimit
       return
     }
     const fallback = DEFAULT_CONTEXT_LIMIT
     const llm = this.ctx.get('llm')
-    const selection = this.selection.current
+    const selection = tab.selection.current
     if (llm === undefined || selection === undefined) {
-      this.contextLimit = this.contextLimit === 0 ? fallback : this.contextLimit
+      tab.contextLimit = tab.contextLimit === 0 ? fallback : tab.contextLimit
       return
     }
     try {
       const info = await llm.resolveModelInfo(selection.provider, selection.model)
       const window = info.context?.contextWindow
-      this.contextLimit = window !== undefined && window > 0 ? window : fallback
+      tab.contextLimit = window !== undefined && window > 0 ? window : fallback
     } catch {
       // An unreachable route must not blank the status bar.
-      this.contextLimit = this.contextLimit === 0 ? fallback : this.contextLimit
+      tab.contextLimit = tab.contextLimit === 0 ? fallback : tab.contextLimit
     }
-    this.paint()
+    if (tab === this.tabs[this.active]) this.paint()
   }
 
   /** Every command the palette offers: this app's, plus the Harness registry's. */
@@ -553,7 +554,7 @@ class TuiApp {
       rows: size.rows,
       title: this.tab.title,
       host: hostLabel(process.env['DSH_HOST'] ?? 'local harness'),
-      modelName: this.modelName,
+      modelName: this.tab.modelName,
       messages: this.tab.messages,
       streamingText: this.tab.streamingText,
       streamingReasoning: this.tab.streamingReasoning,
@@ -568,6 +569,7 @@ class TuiApp {
       palette: this.palette,
       picker: this.picker,
       scrollBack: this.tab.scrollBack,
+      queued: this.tab.queued,
       sessions: this.sessionSummaries(),
       expandTools: this.expandTools,
       background: [...this.background.values()],
@@ -578,8 +580,9 @@ class TuiApp {
       completionTokens: this.tab.completionTokens,
       totalTokens: this.tab.totalTokens,
       haveUsage: this.tab.haveUsage,
-      contextLimit: this.contextLimit,
+      contextLimit: this.tab.contextLimit,
       confirming: this.confirming,
+      searchActive: this.search !== undefined,
     }
   }
 
@@ -615,6 +618,10 @@ class TuiApp {
 
   private handleKey(key: Key): void {
     try {
+      // Any other key disarms a pending quit: ctrl+c, then a moment of
+      // navigation, then ctrl+c again should open the menu, not lose the
+      // session to a stale confirmation.
+      if (key.name !== 'ctrl+c') this.lastQuitRequest = 0
       if (this.picker.kind !== 'none') {
         this.handlePickerKey(key)
         return
@@ -639,7 +646,7 @@ class TuiApp {
   private handlePickerKey(key: Key): void {
     switch (key.name) {
       case 'ctrl+c':
-        this.quit()
+        this.requestQuit()
         return
       case 'esc':
         this.picker.hide()
@@ -694,12 +701,13 @@ class TuiApp {
   private handleChatKey(key: Key): void {
     switch (key.name) {
       case 'ctrl+c':
-        this.quit()
+        this.requestQuit()
         return
 
       case 'esc':
         if (this.palette.open) this.palette.close()
         else if (this.overlay !== '') this.overlay = ''
+        else if (this.search !== undefined) this.clearSearch()
         else if (this.tab.streaming) this.interrupt()
         break
 
@@ -721,7 +729,16 @@ class TuiApp {
           break
         }
         if (this.tab.streaming) {
-          this.setStatus('still replying — esc to interrupt', true)
+          // The turn is busy: hold the prompt instead of rejecting it. It
+          // renders dimmed below the streaming block and sends itself the
+          // moment the reply finishes without an interrupt.
+          this.tab.queued.push(text)
+          this.composer.reset()
+          this.history.add(text)
+          this.persistSoon()
+          this.setStatus(
+            `${String(this.tab.queued.length)} queued — sends when the reply finishes`,
+          )
           break
         }
         this.composer.reset()
@@ -738,18 +755,30 @@ class TuiApp {
         if (chosen !== undefined) {
           this.composer.setValue(`/${chosen.name} `)
           this.palette.close()
+        } else if (this.tabs.length > 1) {
+          // With no palette open, tab cycles sessions — the one-key form of
+          // alt+n, for moving between conversations without a chord.
+          this.selectSession((this.active + 1) % this.tabs.length)
+        } else {
+          this.setStatus('only one session — ctrl+n opens another')
         }
         break
       }
 
       case 'up':
         if (this.palette.open) this.palette.move(-1)
-        else this.composer.moveRow(-1, this.innerWidth())
+        else if (this.history.isRecalling() || this.composer.atFirstRow(this.innerWidth())) {
+          const recalled = this.history.recall(-1, this.composer.value())
+          if (recalled !== undefined) this.composer.setValue(recalled)
+        } else this.composer.moveRow(-1, this.innerWidth())
         break
 
       case 'down':
         if (this.palette.open) this.palette.move(1)
-        else this.composer.moveRow(1, this.innerWidth())
+        else if (this.history.isRecalling() || this.composer.atLastRow(this.innerWidth())) {
+          const recalled = this.history.recall(1, this.composer.value())
+          if (recalled !== undefined) this.composer.setValue(recalled)
+        } else this.composer.moveRow(1, this.innerWidth())
         break
 
       case 'ctrl+p':
@@ -773,6 +802,10 @@ class TuiApp {
         // Compaction is a Harness command, so this is the same path as typing
         // /compact — the binding just saves the typing on a long session.
         void this.runCommand('compact', '')
+        break
+
+      case 'ctrl+y':
+        this.copyLastReply()
         break
 
       case 'left':
@@ -799,15 +832,19 @@ class TuiApp {
         break
       case 'backspace':
         this.composer.backspace()
+        this.history.reset()
         break
       case 'delete':
         this.composer.deleteForward()
+        this.history.reset()
         break
       case 'ctrl+w':
         this.composer.deleteWord()
+        this.history.reset()
         break
       case 'ctrl+k':
         this.composer.killToEnd()
+        this.history.reset()
         break
       // Scrolling is a first-class keyboard surface: a page, a half page, a
       // single line, and a way straight back to the newest output.
@@ -864,7 +901,21 @@ class TuiApp {
           this.selectSession(Number.parseInt(jump[1] ?? '1', 10) - 1)
           break
         }
-        if (key.text !== '') this.composer.insert(key.text)
+        if (key.text === '') break
+        // With a search active and nothing typed, `n`/`N` walk the matches —
+        // the same letter a pager uses — instead of inserting into the buffer.
+        if (this.search !== undefined && this.composer.value() === '' && (key.name === 'n' || key.name === 'N')) {
+          this.jumpToMatch(key.name === 'n' ? 1 : -1)
+          break
+        }
+        // `?` on an empty composer opens the key reference, matching the hint
+        // the footer prints; otherwise it is just a question mark.
+        if (key.name === '?' && this.composer.value() === '') {
+          void this.runCommand('help', '')
+          break
+        }
+        this.history.reset()
+        this.composer.insert(key.text)
         break
       }
     }
@@ -912,19 +963,170 @@ class TuiApp {
     this.tab.scrollBack = 0
   }
 
+  // ------------------------------------------------------------ persistence
+
+  /** Write the durable state, coalescing a burst of edits into one save. */
+  private persistSoon(): void {
+    if (this.persistTimer !== undefined) clearTimeout(this.persistTimer)
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = undefined
+      this.persistNow()
+    }, 500)
+    this.persistTimer.unref?.()
+  }
+
+  /** Write the durable state immediately, ignoring a failing backend. */
+  private persistNow(): void {
+    this.persisted = { inputHistory: [...this.history.snapshot()], thinking: this.showThinking }
+    // Synchronous on purpose: this runs on the quit path, where an async write
+    // would be abandoned the moment `exit(0)` tears the process down.
+    saveStateSync(this.persisted)
+  }
+
+  // ---------------------------------------------------------------- search
+
+  /** Start (or replace) a transcript search and jump to its first match. */
+  private startSearch(query: string): void {
+    const trimmed = query.trim()
+    if (trimmed === '') {
+      this.setStatus('usage: /find <text>', true)
+      this.paint()
+      return
+    }
+    // Searching means the conversation, not whatever help page is open.
+    this.overlay = ''
+    this.search = { query: trimmed, cursor: 0 }
+    this.jumpToMatch(0)
+  }
+
+  /** Clear the search and return the status bar to its idle hint. */
+  private clearSearch(): void {
+    if (this.search === undefined) return
+    this.search = undefined
+    this.setStatus('')
+  }
+
+  /**
+   * Move to another match. The hits are recomputed each jump, so a reply still
+   * streaming in simply adds lines to search rather than staleness. `delta`
+   * wraps around the list; `0` lands on the current match.
+   */
+  private jumpToMatch(delta: number): void {
+    const search = this.search
+    if (search === undefined) return
+    const snapshot = this.snapshot()
+    const hits = findMatches(snapshot, search.query)
+    if (hits.length === 0) {
+      this.setStatus(`no matches for “${search.query}”`, true)
+      this.paint()
+      return
+    }
+    search.cursor = ((search.cursor + delta) % hits.length + hits.length) % hits.length
+    const line = hits[search.cursor] ?? 0
+    const geometry = layout(snapshot)
+    const limit = maxScrollBack(snapshot)
+    // Center the hit vertically, clamped so the view cannot drift off the body.
+    const start = Math.min(Math.max(line - Math.floor(geometry.viewportRows / 2), 0), limit)
+    this.tab.scrollBack = limit - start
+    this.setStatus(
+      `match ${String(search.cursor + 1)}/${String(hits.length)}  ·  n next  ·  N prev  ·  esc clear`,
+    )
+  }
+
+  // -------------------------------------------------------------- clipboard
+
+  /** The last assistant answer worth copying, or undefined when none exists. */
+  private lastReply(): Message | undefined {
+    for (let index = this.tab.messages.length - 1; index >= 0; index -= 1) {
+      const message = this.tab.messages[index]
+      if (message !== undefined && message.role === 'assistant' && message.content.trim() !== '') {
+        return message
+      }
+    }
+    return undefined
+  }
+
+  /**
+   * Copy the last reply to the system clipboard over the OSC 52 escape, the
+   * only clipboard channel a terminal owns. It needs no dependency and no
+   * external process, and it works over SSH and inside tmux. The terminal
+   * decides the payload ceiling, so very long answers are truncated.
+   */
+  private copyLastReply(): void {
+    const message = this.lastReply()
+    if (message === undefined) {
+      this.setStatus('nothing to copy yet — ask the harness something first', true)
+      this.paint()
+      return
+    }
+    const encoded = Buffer.from(message.content, 'utf8').toString('base64')
+    // Cap the payload on the encoded form, kept a multiple of four so it stays
+    // decodable; slicing the content instead would split a surrogate pair and
+    // still overshoot the ceiling by base64's 33% expansion.
+    const cap = 100_000 - (100_000 % 4)
+    const clipped = encoded.length <= cap ? encoded : encoded.slice(0, cap)
+    try {
+      // `ESC ] 52 ; c ; <base64> ST` — the standard form every mainstream
+      // terminal accepts. Written directly, then the next paint redraws.
+      process.stdout.write(`\u001b]52;c;${clipped}\u001b\\`)
+      const truncatedNote = encoded.length > cap ? ' (truncated)' : ''
+      this.setStatus(`copied the last reply to the clipboard${truncatedNote}`)
+    } catch (error) {
+      this.setStatus(`copy failed: ${describeError(error)}`, true)
+    }
+    this.paint()
+  }
+
+  /** Show version and connection details in the transcript pane. */
+  private showAbout(): void {
+    this.showOverlay(
+      [
+        '**dsh-tui-app**',
+        '',
+        `- version \`${VERSION}\``,
+        `- profile \`tui\`  ·  host \`${hostLabel(process.env['DSH_HOST'] ?? 'local harness')}\``,
+        `- model \`${this.tab.modelName}\``,
+        '',
+        'An opencode-style terminal client for DeepSeek Harness. See the',
+        'README for the full key and command reference.',
+      ].join('\n'),
+      'esc to close',
+    )
+  }
+
   // --------------------------------------------------------------- behaviors
 
-  /** Send a prompt and stream the reply into the transcript. */
+  /**
+   * Send a prompt and stream the reply into the transcript.
+   *
+   * A thin wrapper over {@link sendTo} pinned to the session on screen; the
+   * queue-draining follow-up needs the tab-explicit form, because it must
+   * keep writing to the conversation that queued the prompt even if the user
+   * has since switched sessions.
+   */
   private async send(text: string): Promise<void> {
-    // Capture the session: the user may switch tabs while this turn runs, and
-    // every write below belongs to the conversation that asked, not to
-    // whatever happens to be on screen when the reply lands.
-    const tab = this.tab
+    await this.sendTo(this.tab, text)
+  }
+
+  /**
+   * Send a prompt to one specific session and stream the reply.
+   *
+   * `fromQueue` marks a prompt that was already recorded in the composer
+   * history at the moment it was queued, so the drain must not record it a
+   * second time (recall would then surface it twice).
+   */
+  private async sendTo(tab: SessionTab, text: string, fromQueue = false): Promise<void> {
     const agent = tab.agent
     if (agent === undefined) return
 
     this.overlay = ''
-    this.scrollToBottom()
+    // Only follow the newest output when the queued conversation is the one
+    // on screen; a backgrounded session must not yank the view around.
+    if (this.tabs[this.active] === tab) this.scrollToBottom()
+    if (!fromQueue) {
+      this.history.add(text)
+      this.persistSoon()
+    }
     tab.messages.push({ role: 'user', content: text })
     if (tab.title === '') tab.title = text.slice(0, 60)
 
@@ -935,6 +1137,13 @@ class TuiApp {
     tab.streamingTools = []
     this.setSessionStatus(tab, 'running')
     this.setStatus('')
+    if (tab.queued.length > 0) {
+      // More still waiting behind this one: say so, or the queue silently
+      // draining looks like prompts disappearing.
+      this.setStatus(
+        `${String(tab.queued.length)} queued — sends when the reply finishes`,
+      )
+    }
     this.startSpinner()
     this.paint()
 
@@ -970,6 +1179,24 @@ class TuiApp {
       // The answer is in: ring unless it is already on screen.
       this.setSessionStatus(tab, 'ready')
       void this.flush(tab)
+      // An interrupted turn must not launch the next prompt unbidden: the
+      // user asked for silence, so the queue waits for a clean finish. The
+      // follow-up is fire-and-forget like every other send call site —
+      // awaiting it here would stack one frame per queued prompt.
+      const interrupted = abort.signal.aborted
+      if (!interrupted && tab.queued.length > 0) {
+        const next = tab.queued.shift()
+        if (next !== undefined) {
+          void this.sendTo(tab, next, true)
+          this.paint()
+          return
+        }
+      }
+      if (tab.queued.length > 0 && this.tabs[this.active] === tab) {
+        this.setStatus(
+          `${String(tab.queued.length)} queued — kept after the interrupt · /unqueue clears`,
+        )
+      }
       this.paint()
     }
   }
@@ -1027,8 +1254,33 @@ class TuiApp {
 
       case 'thinking':
         this.showThinking = !this.showThinking
+        this.persistSoon()
         this.setStatus(this.showThinking ? 'showing reasoner thinking' : 'hiding reasoner thinking')
         this.paint()
+        return
+
+      case 'find':
+        this.startSearch(rawInput)
+        return
+
+      case 'unqueue': {
+        const count = this.tab.queued.length
+        this.tab.queued = []
+        this.setStatus(
+          count === 0
+            ? 'nothing queued'
+            : `cleared ${String(count)} queued message${count === 1 ? '' : 's'}`,
+        )
+        this.paint()
+        return
+      }
+
+      case 'copy':
+        this.copyLastReply()
+        return
+
+      case 'about':
+        this.showAbout()
         return
 
       case 'tools': {
@@ -1108,26 +1360,29 @@ class TuiApp {
     this.setStatus('starting a new session\u2026')
     this.paint()
 
-    // Keep whatever model is in force; a new session should not silently
-    // revert to the stored default the user just switched away from.
-    const selection = this.selection.current ?? defaultModel.currentSelection()
-    this.selection.current = selection
+    // A new session starts from whatever model the session it was opened from
+    // is using — it should not silently revert to the stored default the user
+    // just switched away from — but with its OWN selection ref, so later
+    // switches in either conversation leave the other alone.
+    const seed = this.tab.selection.current ?? defaultModel.currentSelection()
     const fs = this.ctx.get('fs')
     const cwd = fs === undefined ? process.cwd() : fs.processPath(await fs.resolve('.'))
     const sessionId = brandString<SessionId>(`session-${randomUUID()}`)
+    const tab = newTab(String(sessionId))
+    tab.selection.current = seed
+    tab.modelName = String(seed.model)
 
     try {
       const created = await agents.create({
         sessionId,
         meta: { cwd },
-        agentOptions: { provider: selection.provider, model: selection.model },
-        setup: this.installSelection,
+        agentOptions: { provider: seed.provider, model: seed.model },
+        setup: this.selectionSetupFor(tab),
       })
       await created.agent.whenIdle()
 
       // A new session is an additional one: the conversation that was open
       // keeps running, and its reply will still arrive and ring.
-      const tab = newTab(String(sessionId))
       tab.agent = created.agent
       this.tabs.push(tab)
       this.active = this.tabs.length - 1
@@ -1135,6 +1390,7 @@ class TuiApp {
       this.composer.reset()
       this.setStatus(this.tabs.length > 1 ? `session ${String(this.tabs.length)}` : 'new session')
       this.screen.invalidate()
+      void this.refreshContextLimit(tab)
     } catch (error) {
       this.setStatus(describeError(error), true)
     }
@@ -1165,7 +1421,7 @@ class TuiApp {
           subtitle: provider.name === '' ? provider.id : provider.name,
           provider: provider.id,
           model: model.id,
-          active: model.id === this.modelName,
+          active: model.id === this.tab.modelName,
         })
       }
     }
@@ -1222,10 +1478,12 @@ class TuiApp {
   }
 
   /**
-   * Switch the active model. The running Agent's selection was installed when
-   * it was created, so the switch re-resolves the Agent against the same
-   * Session — that keeps the conversation instead of starting a new one — and
-   * saves the choice as the default for future sessions.
+   * Switch the active session's model. The running Agent's selection was
+   * installed when it was created, so the switch re-resolves the Agent
+   * against the same Session — that keeps the conversation instead of
+   * starting a new one — and saves the choice as the default for future
+   * sessions. Only this session's ref moves: every other tab keeps routing
+   * through its own, unchanged selection.
    */
   private async switchModel(row: PickerItem): Promise<void> {
     const defaultModel = this.ctx.get('agentDefaultModel')
@@ -1237,19 +1495,21 @@ class TuiApp {
       return
     }
 
-    // Mutating the installed ref is the whole switch: the running Agent reads
-    // it when the next step enters prompt assembly, so the conversation and
-    // the Session carry on untouched.
+    // Mutating this tab's installed ref is the whole switch: the running
+    // Agent reads it when the next step enters prompt assembly, so the
+    // conversation and the Session carry on untouched — and no other tab's
+    // Agent shares the ref, so they are not rerouted.
+    const tab = this.tab
     const next = {
-      ...(this.selection.current ?? defaultModel.currentSelection()),
+      ...(tab.selection.current ?? defaultModel.currentSelection()),
       provider: row.provider,
       model: row.model,
     }
-    this.selection.current = next
-    this.modelName = row.model
-    void this.refreshContextLimit()
+    tab.selection.current = next
+    tab.modelName = row.model
+    void this.refreshContextLimit(tab)
     // Token counts belong to the previous route's accounting.
-    this.tab.haveUsage = false
+    tab.haveUsage = false
     this.setStatus(`model → ${row.model}`)
     this.paint()
 
@@ -1314,13 +1574,14 @@ class TuiApp {
     this.setStatus('loading…')
     this.paint()
 
-    const selection = this.selection.current ?? defaultModel.currentSelection()
-    this.selection.current = selection
+    const selection = this.tab.selection.current ?? defaultModel.currentSelection()
+    this.tab.selection.current = selection
+    this.tab.modelName = String(selection.model)
     try {
       const resumed = await agents.resume({
         resumeSessionId: brandString<SessionId>(id),
         agentOptions: { provider: selection.provider, model: selection.model },
-        setup: this.installSelection,
+        setup: this.selectionSetupFor(this.tab),
       })
       this.tab.agent = resumed.agent
       await this.tab.agent.whenIdle()
@@ -1349,6 +1610,23 @@ class TuiApp {
     this.abort?.abort()
     this.stop()
     this.exit(0)
+  }
+
+  /**
+   * The two-step ctrl+c: the first press opens the sessions menu (or, when a
+   * picker is already up, just arms the confirmation), and a second press
+   * inside the window quits. Anything else leaves the app running.
+   */
+  private requestQuit(): void {
+    const now = Date.now()
+    if (now - this.lastQuitRequest < QUIT_CONFIRM_MS) {
+      this.quit()
+      return
+    }
+    this.lastQuitRequest = now
+    if (this.picker.kind === 'none') this.showOpenSessions()
+    this.setStatus('ctrl+c again to quit')
+    this.paint()
   }
 }
 

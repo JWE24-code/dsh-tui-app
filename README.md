@@ -23,7 +23,7 @@ Harness agent instead of a private HTTP API.
  ╭──────────────────────────────────────────────────────────────────────────────╮
  │ Ask the harness…  (/ for commands)                                           │
  ╰──────────────────────────────────────────────────────────────────────────────╯
- deepseek-chat  ·  ctx 1.5K/65K 2%  ·  ↑1.2K ↓312          / commands  ·  ctrl+c quit
+ deepseek-chat  ·  ctx 1.5K/65K 2%  ·  ↑1.2K ↓312          / commands  ·  ctrl+c menu
 ```
 
 ## Why a bundle
@@ -90,6 +90,7 @@ npm run typecheck
 | `--context-limit <n>` | Override the context budget; the default is the model's own capacity |
 | `--mouse` | Report mouse events so the wheel scrolls (costs terminal text selection) |
 | `--no-bell` | Stay silent when a session finishes |
+| `--version` | Print the app version and exit |
 
 `DSH_TUI_CONTEXT_LIMIT` sets the same budget; `DSH_TUI_THEME=light\|dark`
 overrides background detection; `NO_COLOR` disables styling.
@@ -98,8 +99,10 @@ overrides background detection; `NO_COLOR` disables styling.
 
 | Key | Action |
 |---|---|
-| `enter` | Send · `ctrl+j` inserts a newline |
+| `enter` | Send · queues while a reply streams · `ctrl+j` inserts a newline |
+| `↑` / `↓` | On the first / last composer row, recall earlier prompts |
 | `/` | Command palette · `tab` accepts · `esc` dismisses |
+| `?` | Open the key reference on an empty composer |
 | `esc` | Interrupt a streaming reply |
 | `ctrl+n` / `ctrl+r` / `ctrl+t` | New session · resume · toggle thinking |
 | `pgup`/`pgdn` | Scroll a page · `ctrl+u`/`ctrl+d` half a page |
@@ -107,12 +110,26 @@ overrides background detection; `NO_COLOR` disables styling.
 | `ctrl+o` | Expand or collapse the turn's tool calls |
 | `ctrl+x` | Compact the session |
 | `ctrl+b` | Expand or collapse the background-agent strip |
-| `ctrl+n` | Open another session · `alt+1`…`alt+9` jump to one |
-| `alt+n`/`alt+p` | Next / previous session |
-| `ctrl+a`/`ctrl+e`, `ctrl+w`, `ctrl+k` | Line start/end, delete word, kill to end |
-| `ctrl+c` | Quit |
+| `ctrl+y` | Copy the last reply to the clipboard |
+| `n` / `N` | With a search open and an empty composer, next / previous match |
+| `alt+1`…`alt+9` | Jump to a session · `alt+n`/`alt+p` cycle · `tab` cycles too |
+| `ctrl+a`/`ctrl+e`/`home`/`end`, `ctrl+w`, `ctrl+k` | Line start/end, delete word, kill to end |
+| `alt+b`/`alt+f`, `ctrl+←`/`ctrl+→` | Word motion · `delete` deletes forward |
+| `ctrl+c` | Sessions menu · press again within 1.5s to quit |
 
-In a list (`/model`, `/resume`): type to filter, `enter` selects, `esc` closes.
+In a list (`/model`, `/resume`): type to filter, `enter` selects, `esc` closes;
+`ctrl+n`/`ctrl+p` or the arrows move, `pgup`/`pgdn` move by ten, `home`/`end`
+jump, and `ctrl+u` clears the filter.
+
+## Queueing while a reply streams
+
+Pressing `enter` while the active session is still replying does not reject
+the prompt — it queues it. Queued prompts render as dimmed user turns under
+the streaming block, with the footer counting them (`2 queued — sends when
+the reply finishes`). The moment a turn finishes without an interrupt, the
+next queued prompt sends itself, in order, into the same session — even if
+you have switched tabs in between. Interrupting with `esc` keeps the queue;
+it flushes the next time a turn completes cleanly, or `/unqueue` discards it.
 
 ## Tool calls and scrolling
 
@@ -133,6 +150,32 @@ suppress their own text selection while mouse reporting is on, which is a poor
 trade for a scroll you can do with `pgup`. Pass `--mouse` if you want it.
 Scrolling away from the newest output is announced in the status bar with the
 way back (`ctrl+g`).
+
+## Searching the transcript
+
+`/find <text>` searches the whole conversation (case-insensitive) and scrolls
+the first match into view, with a `match 1/12` counter in the status bar. On
+an empty composer, `n` jumps to the next match and `N` to the previous one —
+the same letters a pager uses — and `esc` clears the search so `n` types an
+`n` again (press `esc` a second time to interrupt a streaming reply; the
+cheapest thing open closes first). Matches are recomputed each jump, so a
+reply still streaming in simply adds lines to search rather than going stale.
+
+## Copying an answer
+
+`/copy` (or `ctrl+y`) yanks the last reply to the system clipboard over the
+OSC 52 escape — the one clipboard channel a terminal owns. It needs no
+dependency and no external process, so it works over SSH and inside tmux.
+Very long answers are truncated to what the terminal is willing to accept.
+
+## What persists
+
+Sent prompts and the thinking preference are saved to
+`$DSH_HOME/tui-state.json` (`$DSH_HOME` defaults to `~/.dsh`) and restored on
+the next launch. The model choice is saved through the Harness's own
+`saveSelection`, not this file. Writing is atomic and best-effort: a read-only
+home means the app runs exactly as before, just without recall across
+restarts.
 
 ## Reaching it from another device
 
@@ -209,7 +252,11 @@ skips the picker; use `provider/model` when two routes serve the same id.
 
 Switching re-resolves the agent against the **same session**, so the
 conversation survives the change, and the choice is saved as the default for
-new sessions.
+new sessions. The model is **per session**: switching in one conversation
+leaves every other tab on the model it was already using, and the footer's
+model and context bar always describe the session on screen. A new session
+starts from the model of the session it was opened from, then diverges
+independently.
 
 ## Commands
 
@@ -220,7 +267,7 @@ alongside the app's own:
 | Command | Owner |
 |---|---|
 | `/compact`, and any other plugin command | `ctx.commands` (the Harness registry) |
-| `/new`, `/resume`, `/model`, `/thinking`, `/tools`, `/help`, `/exit` | this app |
+| `/new`, `/sessions`, `/close`, `/resume`, `/model`, `/thinking`, `/tools`, `/find`, `/unqueue`, `/copy`, `/about`, `/help`, `/exit` (`/quit`) | this app |
 
 Unknown commands are dispatched to `ctx.commands.execute()` and only reported
 as unknown if the registry also rejects them.
@@ -247,11 +294,14 @@ that the service is missing.
 src/
   index.ts         the app plugin: Harness wiring, key dispatch, commands
   startup.ts       the cmdline provider (--resume/--model/--thinking/...)
+  persist.ts       durable composer history and preferences under $DSH_HOME
+  version.ts       reads the package version for --version and /about
   tui/
     screen.ts      raw mode, alternate screen, per-line diffed painting
     keys.ts        escape-sequence decoding, chunk-tolerant
     view.ts        frame composition and layout arithmetic
-    state.ts       composer, palette, picker, token formatting
+    state.ts       composer, palette, picker, history, token formatting
+    stream.ts      projects assistant-stream chunks onto the transcript
     markdown.ts    markdown to ANSI plus a small syntax highlighter
     text.ts        ANSI-aware width, wrap, truncate
     theme.ts       adaptive palette and SGR styling
@@ -263,14 +313,24 @@ it can be tested without a profile.
 ## Tests
 
 ```sh
-node --experimental-strip-types tests/render-smoke.ts   # 161 assertions
+npm test        # render + queue + persist + stream + pty (368 + 8 + 13 + 20 + 13)
+npm run test:pty   # just the pty round trip, for a quick loop (needs script(1))
 node --experimental-strip-types tests/preview.ts [normal|palette|picker|stream|think]
 ```
 
 The smoke test renders real frames at sizes from 20x8 to 200x60 and asserts
 the invariants the screen driver depends on: the frame never exceeds the
 window, no line exceeds the width, and the cursor always lands inside the
-composer. `preview.ts` prints a frame so a layout change can be eyeballed.
+composer. It also exercises the input-history recall and transcript-search
+matching; sibling scripts cover queue rendering, the persistence round-trip
+against a temporary `$DSH_HOME`, and the stream projection (a synthetic model
+reply replayed through `tui/stream.ts`). The pty harness drives the real
+`Screen`, key decoding, and frame renderer through an actual pseudo-terminal —
+raw mode, the alternate screen, split escape sequences, and the two-step
+ctrl+c — so the terminal layer is proven by a round trip, not types alone.
+`preview.ts` prints a frame so a layout change can be eyeballed. CI runs the
+whole suite on Node 22 and 24 plus a typecheck against the real Harness
+packages.
 
 ## Status and caveats
 
@@ -284,9 +344,13 @@ composer. `preview.ts` prints a frame so a layout change can be eyeballed.
     provider parses the real command line.
   - `dsh --profile tui </dev/null` boots the bundle, creates the agent, reaches
     `whenIdle()`, and exits on the non-TTY guard.
-- **The interactive loop still needs a human.** Key handling, painting, and a
-  streamed reply have not been driven through a real terminal against a live
-  model — that path is proven by types and unit rendering, not by a round trip.
+- **The terminal layer is round-trip tested; the reply projection is too.** The
+  pty harness drives real keystrokes through the actual `Screen`, decoder, and
+  renderer, and `tests/stream-smoke.ts` replays the chunk→transcript switch
+  (`src/tui/stream.ts`) against a synthetic reply. What remains driven only by
+  a human is the full boot-to-model round trip — a real agent streaming through
+  the Harness's `agent/assistant-stream` events — proven by types and unit
+  rendering, not end-to-end automation.
 - **`ctx.sessionQuery` listing is probed.** The service is documented as
   offering "filtered lists" without a stable method name in the docs read here,
   so `/resume` tries `listSessions`, `list`, then `querySessions` and reports
