@@ -7,6 +7,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Plugin management** — `/plugins` lists the packages the active profile
+  composes: enabled ones first in composition order and marked with a dot,
+  disabled dependencies underneath. `enter` moves a package in or out of
+  `dsh.profile.bundles` — a change that applies on the next launch, and the
+  status line says so. `/plugins add <pkg>` and `/plugins remove <pkg>` run
+  pnpm behind a confirmation (an install runs the package's scripts as you),
+  and the base bundle and this app itself are protected from toggling. A
+  removal edits the layer stack before uninstalling, so an interrupted run
+  leaves a profile that still boots.
+- **Voice control** — `ctrl+v` push-to-talk dictation, transcribed locally by
+  whisper.cpp and dropped into the composer for review rather than auto-sent.
+  Weights and executable resolve from `--voice-model` / `--voice-bin`, then
+  `DSH_TUI_WHISPER_MODEL` / `DSH_TUI_WHISPER_BIN`, then a PATH search; when
+  nothing is found the app reports it once and carries on exactly as if voice
+  did not exist. No audio leaves the machine.
 
 - **Selectable color palettes** — `/theme` opens a picker over `rose-pine`
   (the default, unchanged), `gruvbox`, `nord`, `solarized`, and `mono`;
