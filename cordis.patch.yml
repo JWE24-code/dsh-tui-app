@@ -1,4 +1,4 @@
-# The dsh-tui bundle patch: an interactive terminal app over dsh-base.
+# The moqi bundle patch: an interactive terminal app over dsh-base.
 #
 # It mounts no Host, HTTP server, or browser plugin — the terminal is the only
 # surface. A startup provider parses this app's own flags out of the shared
@@ -17,10 +17,10 @@
 
 - insert:
     - id: tui-startup
-      name: '@jwe24-code/dsh-tui/startup'
+      name: 'moqi/startup'
 
     - id: tui-app
-      name: '@jwe24-code/dsh-tui'
+      name: 'moqi'
       inject: [tuiStartup]
       config:
         resumeSessionId: !!js ctx.tuiStartup.resumeSessionId

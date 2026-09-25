@@ -151,7 +151,7 @@ check('every recorder produces 16 kHz mono', RECORDERS.every((recorder) => {
     equal(
       'the binary gap names the install and the override',
       voiceGapMessage(noBinary.gap),
-      'no whisper binary — run: npm run setup-voice, or set DSH_TUI_WHISPER_BIN',
+      'no whisper binary — run: npm run setup-voice, or set MOQI_WHISPER_BIN',
     )
   }
 }
@@ -192,7 +192,7 @@ check('every recorder produces 16 kHz mono', RECORDERS.every((recorder) => {
     equal(
       'a bad binary from the environment names the variable',
       voiceGapMessage(fromEnv.gap),
-      'no whisper binary at /nope/whisper-cli — fix DSH_TUI_WHISPER_BIN',
+      'no whisper binary at /nope/whisper-cli — fix MOQI_WHISPER_BIN',
     )
   }
 }
@@ -288,7 +288,7 @@ check('every recorder produces 16 kHz mono', RECORDERS.every((recorder) => {
     equal(
       'names the variable instead of the flag',
       voiceGapMessage(missingEnv.gap),
-      'no model at /models/gone.bin — fix DSH_TUI_WHISPER_MODEL',
+      'no model at /models/gone.bin — fix MOQI_WHISPER_MODEL',
     )
   }
 }
@@ -437,8 +437,8 @@ check(
   // whisper happens to be installed here is not something a suite may depend on.
   const real = systemProbe()
   equal('the probe reports the real home directory', real.home, homedir())
-  check('a command that cannot exist is not found', !real.hasCommand('dsh-tui-definitely-not-a-command'))
-  check('a path that cannot exist does not exist', !real.exists('/dsh-tui/definitely/not/a/path'))
+  check('a command that cannot exist is not found', !real.hasCommand('moqi-definitely-not-a-command'))
+  check('a path that cannot exist does not exist', !real.exists('/moqi/definitely/not/a/path'))
   check('node itself is on PATH', hasCommand('node') || hasCommand(process.execPath))
   check('this test file exists', fileExists(new URL(import.meta.url).pathname))
 
@@ -457,9 +457,9 @@ check(
 // The environment is read, but only from the three documented variables.
 {
   const options = voiceOptionsFromEnv({
-    DSH_TUI_WHISPER_MODEL: '/m.bin',
-    DSH_TUI_WHISPER_BIN: '/b',
-    DSH_TUI_WHISPER_LANG: 'nl',
+    MOQI_WHISPER_MODEL: '/m.bin',
+    MOQI_WHISPER_BIN: '/b',
+    MOQI_WHISPER_LANG: 'nl',
   })
   equal('the model variable is read', options.envModel, '/m.bin')
   equal('the binary variable is read', options.envBinary, '/b')

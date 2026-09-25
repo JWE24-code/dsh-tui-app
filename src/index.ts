@@ -1,5 +1,5 @@
 /**
- * dsh-tui — an interactive terminal app for DeepSeek Harness.
+ * moqi — an interactive terminal app for DeepSeek Harness.
  *
  * The bundle patch rides over `dsh-base` without a Host, HTTP server, or
  * browser plugin: the terminal is the only surface. This module owns the
@@ -7,7 +7,7 @@
  * stream into the transcript, and dispatching slash commands through
  * `ctx.commands` — while `./tui/*` owns everything drawn on screen.
  *
- * @module dsh-tui
+ * @module moqi
  */
 
 import { randomUUID } from 'node:crypto'
@@ -139,7 +139,7 @@ import {
 } from './voice.ts'
 
 /** Stable Cordis plugin name. */
-export const name = 'dsh-tui'
+export const name = 'moqi'
 
 /** Core services required before the terminal can open. */
 export const inject = ['agentDefaultModel', 'agents', 'sessions']
@@ -1365,7 +1365,7 @@ class TuiApp {
       return
     }
 
-    const wavPath = join(tmpdir(), `dsh-tui-voice-${randomUUID()}.wav`)
+    const wavPath = join(tmpdir(), `moqi-voice-${randomUUID()}.wav`)
     try {
       this.voiceRecording = startRecording(resolution.setup, wavPath)
     } catch (error) {
@@ -2691,7 +2691,7 @@ class TuiApp {
    * live self-restart would abandon the terminal the app is drawing in.
    */
   private async selfUpdate(): Promise<void> {
-    const packageName = '@jwe24-code/dsh-tui'
+    const packageName = 'moqi'
     const registry = process.env['NPM_CONFIG_REGISTRY'] ?? 'https://registry.npmjs.org'
     this.setStatus('checking npm for a newer version…')
     this.paint()
@@ -2734,14 +2734,14 @@ class TuiApp {
   private showAbout(): void {
     this.showOverlay(
       [
-        '**dsh-tui**',
+        '**moqi**',
         '',
         `- version \`${VERSION}\``,
         `- profile \`tui\`  ·  host \`${hostLabel(process.env['DSH_HOST'] ?? 'local harness')}\``,
         `- model \`${this.tab.modelName}\``,
         '',
-        'An opencode-style terminal client for DeepSeek Harness. See the',
-        'README for the full key and command reference.',
+        'Moqi — the unspoken understanding between you and your harness.',
+        'See the README for the full key and command reference.',
       ].join('\n'),
       'esc to close',
     )
@@ -2827,7 +2827,7 @@ class TuiApp {
       this.paint()
       return
     }
-    const file = join(tmpdir(), `dsh-tui-draft-${String(process.pid)}.md`)
+    const file = join(tmpdir(), `moqi-draft-${String(process.pid)}.md`)
     await writeFile(file, `${this.composer.value()}\n`)
     this.screen.stop()
     try {
@@ -4393,7 +4393,7 @@ function describeError(error: unknown): string {
 export function apply(ctx: Context, config: Config): void {
   const exit = ctx.get('appExit')
   if (exit === undefined) {
-    throw new Error('dsh-tui: the launcher must provide ctx.appExit before the tree mounts')
+    throw new Error('moqi: the launcher must provide ctx.appExit before the tree mounts')
   }
 
   const app = new TuiApp(ctx, config, exit)

@@ -8,7 +8,7 @@
  * It needs working credentials and costs a model call, so it is NOT part of
  * `npm test`; run it deliberately:
  *
- *   DSH_TUI_LIVE=1 npm run test:live
+ *   MOQI_LIVE=1 npm run test:live
  *
  * Any failure still exits non-zero, so it can gate a release rather than only
  * print.
@@ -19,7 +19,7 @@ import { resolve } from 'node:path'
 import { stripAnsi } from '../src/tui/text.ts'
 
 const ROOT = resolve(import.meta.dirname, '..')
-const PROFILE = process.env['DSH_TUI_LIVE_PROFILE'] ?? 'tui'
+const PROFILE = process.env['MOQI_LIVE_PROFILE'] ?? 'tui'
 /**
  * The marker must not be derivable from the prompt.
  *
@@ -33,9 +33,9 @@ const PROFILE = process.env['DSH_TUI_LIVE_PROFILE'] ?? 'tui'
  * come back from the model, which in turn proves the prompt reached it.
  */
 const PROMPT =
-  process.env['DSH_TUI_LIVE_PROMPT'] ?? 'reply with exactly one word: the number after three, spelled out in capitals'
-const MARKER = process.env['DSH_TUI_LIVE_EXPECT'] ?? 'FOUR'
-const TIMEOUT_MS = Number.parseInt(process.env['DSH_TUI_LIVE_TIMEOUT_MS'] ?? '180000', 10)
+  process.env['MOQI_LIVE_PROMPT'] ?? 'reply with exactly one word: the number after three, spelled out in capitals'
+const MARKER = process.env['MOQI_LIVE_EXPECT'] ?? 'FOUR'
+const TIMEOUT_MS = Number.parseInt(process.env['MOQI_LIVE_TIMEOUT_MS'] ?? '180000', 10)
 
 let checks = 0
 function check(label: string, condition: boolean): void {
@@ -54,8 +54,8 @@ function which(bin: string): boolean {
 }
 
 async function main(): Promise<void> {
-  if (process.env['DSH_TUI_LIVE'] !== '1') {
-    console.log('skipped: set DSH_TUI_LIVE=1 to run the live model round trip')
+  if (process.env['MOQI_LIVE'] !== '1') {
+    console.log('skipped: set MOQI_LIVE=1 to run the live model round trip')
     return
   }
   if (!which('script')) {
@@ -122,7 +122,7 @@ async function main(): Promise<void> {
     // stub: each overlay has to appear with its own content, and esc has to
     // close it again before the next one opens.
     const probes: { command: string; expect: string }[] = [
-      { command: '/about', expect: 'dsh-tui' },
+      { command: '/about', expect: 'moqi' },
       { command: '/jobs', expect: 'Background jobs' },
       { command: '/mcp', expect: 'MCP servers' },
       { command: '/tree', expect: 'Session tree' },

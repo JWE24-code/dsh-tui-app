@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to `dsh-tui` are documented here. The format follows
+All notable changes to `moqi` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
@@ -46,14 +46,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Voice control** — `ctrl+v` push-to-talk dictation, transcribed locally by
   whisper.cpp and dropped into the composer for review rather than auto-sent.
   Weights and executable resolve from `--voice-model` / `--voice-bin`, then
-  `DSH_TUI_WHISPER_MODEL` / `DSH_TUI_WHISPER_BIN`, then a PATH search; when
+  `MOQI_WHISPER_MODEL` / `MOQI_WHISPER_BIN`, then a PATH search; when
   nothing is found the app reports it once and carries on exactly as if voice
   did not exist. No audio leaves the machine.
 
 - **Selectable color palettes** — `/theme` opens a picker over `rose-pine`
   (the default, unchanged), `gruvbox`, `nord`, `solarized`, and `mono`;
   `/theme <name>` switches straight away. Each palette ships both a light and
-  a dark variant, so `DSH_TUI_THEME=light|dark` still picks the variant and
+  a dark variant, so `MOQI_THEME=light|dark` still picks the variant and
   `NO_COLOR` still turns color off entirely. `mono` is greyscale and high
   contrast for anyone the hue-based palettes fail. The choice is saved to
   `$DSH_HOME/tui-state.json` and restored before the first frame.
@@ -147,13 +147,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **Renamed to `@jwe24-code/dsh-tui`**, with the binary shortened to `dsh-tui`.
-  An unrelated `dsh-tui-app` already exists on npm — a dormant v0.0.1 stub, but
-  one describing the same thing ("Terminal UI for DeepSeek Harness … installed
-  into a dsh profile as a bundle"), so the two would have been conflated in
-  search. The scope alone would have avoided any technical clash; this avoids
-  the confusion as well, and it is far cheaper before the first publish than
-  after. The GitHub repository keeps its name.
+- **The app is now Moqi** — 默契, the unspoken understanding between you and
+  your harness. The package is the unscoped `moqi`, the binary is `moqi`, the
+  in-app mark reads `◆ moqi`, and the environment variables move from
+  `DSH_TUI_*` to `MOQI_*`. The harness's own `DSH_HOME` and `DSH_HOST` are
+  untouched, because they are not ours to rename.
+
+  Both earlier names were already taken on npm by other DeepSeek Harness
+  terminals: `dsh-tui-app`, a dormant v0.0.1 stub, and `dsh-tui`, active at
+  v0.2.19. A scope would have avoided the technical clash but not the
+  confusion — three similarly named terminals for one harness is a
+  search-results problem, not a naming one. Moqi is its own name, and the
+  description no longer borrows another tool's for its shape: it is not an
+  "opencode-style terminal", it is this.
+
+  The GitHub repository keeps its name for now, so existing clone URLs work.
 
 - **A turn now reads in the order it happened.** The transcript held a turn's
   prose as one string and its tool calls as a separate list, then drew every
@@ -212,7 +220,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   so `npm test` could not load it from the bare `npm ci` that CI runs —
   every push had failed since the `tuiHost` seam landed. The seam's plain
   classes moved to `src/tui-host-core.ts`, which the suite imports and
-  `src/tui-host.ts` re-exports, so `@jwe24-code/dsh-tui/tui-host` still
+  `src/tui-host.ts` re-exports, so `moqi/tui-host` still
   exports exactly what it did. A development checkout could not reproduce any
   of this, because `npm run link-types` makes the import resolve, so
   `tests/offline-imports-smoke.ts` now walks the import graph of every suite
@@ -231,7 +239,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.1.0] - initial
 
-- opencode-style terminal app for DeepSeek Harness: bordered composer, live
-  token counter, slash palette, markdown transcript with syntax-highlighted
-  code, multi-session tabs, background-agent strip, and a tailnet web UI
-  helper.
+- Terminal app for DeepSeek Harness: bordered composer, live token counter,
+  slash palette, markdown transcript with syntax-highlighted code,
+  multi-session tabs, background-agent strip, and a tailnet web UI helper.

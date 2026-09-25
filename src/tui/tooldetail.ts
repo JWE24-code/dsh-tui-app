@@ -7,7 +7,7 @@
  * summary is a pair of pure functions over strings: no Harness types, no I/O,
  * replayable in a dependency-free suite next to the stream projection.
  *
- * @module dsh-tui/tui/tooldetail
+ * @module moqi/tui/tooldetail
  */
 
 import type { ToolActivity } from './state.ts'

@@ -7,9 +7,9 @@
  * keyboard away from the app's own bindings.
  *
  * This module is the Cordis-bound half; the rules it delegates to live in
- * `./tui-host-core.ts` and are re-exported here, so `@jwe24-code/dsh-tui/tui-host`
+ * `./tui-host-core.ts` and are re-exported here, so `moqi/tui-host`
  * remains the one import a plugin needs.
- * @module @jwe24-code/dsh-tui/tui-host
+ * @module moqi/tui-host
  */
 
 import { Service } from '@deepseek-ai/cordis'

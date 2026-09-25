@@ -9,13 +9,13 @@
  * `NO_COLOR` set.
  *
  * The NO_COLOR behavior is still exercised, deliberately, by a child process
- * that re-runs the suite with `DSH_TUI_THEME_SMOKE_NO_COLOR=1` and this module
+ * that re-runs the suite with `MOQI_THEME_SMOKE_NO_COLOR=1` and this module
  * leaving the environment alone.
  *
  * @module
  */
 
-if (process.env['DSH_TUI_THEME_SMOKE_NO_COLOR'] !== '1') {
+if (process.env['MOQI_THEME_SMOKE_NO_COLOR'] !== '1') {
   delete process.env['NO_COLOR']
   if (process.env['TERM'] === undefined || process.env['TERM'] === 'dumb') {
     process.env['TERM'] = 'xterm-256color'

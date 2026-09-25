@@ -213,7 +213,7 @@ function assertFrame(label: string, snap: Snapshot): string[] {
 }
 
 const normal = assertFrame('normal', snapshot())
-check('header shows the mark', stripAnsi(normal[0] ?? '').includes('◆ dsh'))
+check('header shows the mark', stripAnsi(normal[0] ?? '').includes('◆ moqi'))
 check('footer shows the model', stripAnsi(normal[normal.length - 1] ?? '').includes('deepseek-chat'))
 check('footer shows exact context', stripAnsi(normal[normal.length - 1] ?? '').includes('ctx 1.5K/65K'))
 check('footer shows usage arrows', stripAnsi(normal[normal.length - 1] ?? '').includes('↑1.2K'))

@@ -4,7 +4,7 @@
  * It parses this app's own flags out of the shared immutable cmdline snapshot
  * and publishes them as a service, so the app row can consume them lazily —
  * the same shape the shipped headless bundle uses.
- * @module dsh-tui/startup
+ * @module moqi/startup
  */
 
 import { Command } from 'commander'
@@ -113,7 +113,7 @@ export function apply(ctx: Context): void {
 
     // Left undefined, the app asks the provider for the model's real capacity.
     let contextLimit: number | undefined
-    const fromEnvironment = process.env['DSH_TUI_CONTEXT_LIMIT']
+    const fromEnvironment = process.env['MOQI_CONTEXT_LIMIT']
     if (fromEnvironment !== undefined && /^\d+$/.test(fromEnvironment)) {
       contextLimit = Number.parseInt(fromEnvironment, 10)
     }
@@ -137,7 +137,7 @@ export function apply(ctx: Context): void {
       bell: options.bell !== false,
       restore: options.restore !== false,
       peers: options.peer ?? [],
-      // Left undefined the app reads DSH_TUI_WHISPER_MODEL / _BIN, then falls
+      // Left undefined the app reads MOQI_WHISPER_MODEL / _BIN, then falls
       // back to its own search, so passing nothing here is the normal case.
       voiceModel: options.voiceModel,
       voiceBin: options.voiceBin,

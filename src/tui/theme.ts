@@ -100,12 +100,12 @@ export function listThemes(): readonly Theme[] {
 export type { Theme, ThemePalette } from './themes.ts'
 
 /**
- * Whether this terminal is being treated as dark. `DSH_TUI_THEME` wins; the
+ * Whether this terminal is being treated as dark. `MOQI_THEME` wins; the
  * `COLORFGBG` convention decides otherwise; dark is the fallback because it is
  * the common default and the safer miss.
  */
 function detectDark(): boolean {
-  const forced = process.env['DSH_TUI_THEME']
+  const forced = process.env['MOQI_THEME']
   if (forced === 'light') return false
   if (forced === 'dark') return true
   const fgbg = process.env['COLORFGBG']

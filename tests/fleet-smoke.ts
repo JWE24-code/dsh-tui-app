@@ -199,7 +199,7 @@ check(
 
 // ------------------------------------------------- presence round trip
 
-const home = mkdtempSync(join(tmpdir(), 'dsh-tui-presence-'))
+const home = mkdtempSync(join(tmpdir(), 'moqi-presence-'))
 try {
   const publisher = new PresencePublisher(home, 'testbox')
   publisher.publish([

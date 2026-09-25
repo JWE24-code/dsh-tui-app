@@ -1,7 +1,7 @@
 {
-  "name": "@jwe24-code/dsh-tui",
+  "name": "moqi",
   "version": "0.2.0",
-  "description": "An opencode-style terminal app for DeepSeek Harness: bordered composer, live token counter, slash palette, markdown transcript with syntax-highlighted code.",
+  "description": "Moqi — the unspoken understanding between you and your harness. A terminal app for DeepSeek Harness: bordered composer, live token counter, slash palette, markdown transcript with syntax-highlighted code.",
   "type": "module",
   "license": "MIT",
   "author": "JWE24-code <292770342+JWE24-code@users.noreply.github.com>",
@@ -10,7 +10,7 @@
     "url": "git+https://github.com/JWE24-code/dsh-tui-app.git"
   },
   "bin": {
-    "dsh-tui": "bin/dsh-tui.mjs"
+    "moqi": "bin/moqi.mjs"
   },
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
@@ -54,7 +54,7 @@
     "test:pty": "node --experimental-strip-types tests/pty.ts",
     "setup-voice": "node scripts/install-voice.mjs",
     "bench": "node --experimental-strip-types scripts/bench-render.ts",
-    "test:live": "DSH_TUI_LIVE=1 node --experimental-strip-types tests/live-pty.ts",
+    "test:live": "MOQI_LIVE=1 node --experimental-strip-types tests/live-pty.ts",
     "test:package": "node scripts/verify-package.mjs"
   },
   "dependencies": {
@@ -107,5 +107,13 @@
     "@deepseek-ai/schemastery": {
       "optional": true
     }
-  }
+  },
+  "keywords": [
+    "moqi",
+    "deepseek",
+    "dsh",
+    "tui",
+    "terminal",
+    "agent"
+  ]
 }

@@ -59,7 +59,7 @@ check('a stored dir composes root + project + id', composed === join(sessionsRoo
 
 // ------------------------------------------------------------- fs round trip
 
-const sandbox = await mkdtemp(join(tmpdir(), 'dsh-tui-sessions-'))
+const sandbox = await mkdtemp(join(tmpdir(), 'moqi-sessions-'))
 const savedHome = process.env['DSH_HOME']
 process.env['DSH_HOME'] = sandbox
 try {
