@@ -147,6 +147,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **CI is green again: the test suite no longer reaches for the Harness.**
+  `tests/tui-host-smoke.ts` imported `src/tui-host.ts`, which imports Cordis,
+  so `npm test` could not load it from the bare `npm ci` that CI runs —
+  every push had failed since the `tuiHost` seam landed. The seam's plain
+  classes moved to `src/tui-host-core.ts`, which the suite imports and
+  `src/tui-host.ts` re-exports, so `@jwe24-code/dsh-tui-app/tui-host` still
+  exports exactly what it did. A development checkout could not reproduce any
+  of this, because `npm run link-types` makes the import resolve, so
+  `tests/offline-imports-smoke.ts` now walks the import graph of every suite
+  and fails on a Harness import wherever it runs.
+
 - **`/resume` now moves the tab's session id.** Adopting an earlier session
   swapped the Agent but left the tab claiming the id it had before, so the
   fleet overview published the wrong session for that tab and `/delete`

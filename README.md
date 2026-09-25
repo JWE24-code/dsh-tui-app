@@ -623,8 +623,16 @@ src/
 `src/tui/` imports nothing from the Harness and nothing from npm, which is why
 it can be tested without a profile. `src/tui-host.ts` is the one module that
 does import Cordis, because it *is* the seam (exported as
-`@jwe24-code/dsh-tui-app/tui-host`); its shortcut registry and status line are
-plain classes the service delegates to, so both are tested without a context.
+`@jwe24-code/dsh-tui-app/tui-host`); the shortcut registry and status line it
+delegates to are plain classes in `src/tui-host-core.ts`, which the suites
+import instead, so both are tested without a context — and re-exported from the
+seam, so a plugin still needs the one import.
+
+That split is load-bearing rather than tidy: `npm test` runs from a bare
+`npm ci`, where `@deepseek-ai/*` does not resolve at all, so a suite that
+reaches the Harness cannot even load. `tests/offline-imports-smoke.ts` walks
+the import graph of every suite and fails if one does, because a development
+checkout has run `npm run link-types` and would otherwise never notice.
 
 ## Tests
 
@@ -680,7 +688,7 @@ regression still would.
     provider parses the real command line.
   - `dsh --profile tui </dev/null` boots the bundle and exits on the non-TTY
     guard.
-- **28 suites, 1446 assertions**, covering rendering (including a pty round
+- **29 suites, 1451 assertions**, covering rendering (including a pty round
   trip through the real screen, decoder, and frame renderer), streaming
   projection, queueing, steering, persistence, session storage, cross-session
   search, the panels, the plugin seam, i18n, the fleet, and the render cache.
@@ -709,7 +717,7 @@ regression still would.
 ## Release steps
 
 ```sh
-npm test              # 26 suites, including the pty round trip
+npm test              # 29 suites, including the pty round trip
 npm run test:live     # a real model turn through the TUI (needs credentials)
 npm run test:package  # packs, installs into a clean prefix + DSH_HOME, boots
 npm publish           # prepublishOnly re-runs build + typecheck + npm test

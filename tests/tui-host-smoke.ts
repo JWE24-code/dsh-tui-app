@@ -1,9 +1,17 @@
 /**
  * Smoke tests for the `tuiHost` plugin seam: what a plugin may claim, what it
  * may not, and that releasing a claim really releases it.
+ *
+ * Imported from `tui-host-core.ts`, not `tui-host.ts`: the latter pulls in
+ * Cordis, which no suite may need.
  */
 import assert from 'node:assert/strict'
-import { RESERVED_COMBOS, ShortcutRegistry, StatusLine, shortcutProblem } from '../src/tui-host.ts'
+import {
+  RESERVED_COMBOS,
+  ShortcutRegistry,
+  StatusLine,
+  shortcutProblem,
+} from '../src/tui-host-core.ts'
 
 let checks = 0
 function check(label: string, condition: boolean): void {
