@@ -2048,8 +2048,12 @@ class TuiApp {
           void this.steer(prompt)
           break
         }
+        // Materialize first: the draft has to be read out of the composer
+        // before the composer is emptied, or the prompt is born blank — the
+        // transcript commits an empty turn and the model is asked nothing.
+        const prompt = this.materializePrompt()
         this.composer.reset()
-        void this.sendPrompt(this.materializePrompt())
+        void this.sendPrompt(prompt)
         break
       }
 

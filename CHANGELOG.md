@@ -162,6 +162,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Every prompt was sent blank.** On the plain `enter` path the composer was
+  reset *before* `materializePrompt()` read it, so the draft was collected from
+  an already-empty composer: the transcript committed a turn with no text (a
+  bare `▌` bar), the tab title stayed `new conversation`, and the model was
+  asked nothing at all — answering the empty turn with a generic greeting,
+  which read as "the agent ignored me". Introduced when `materializePrompt()`
+  arrived with `@file` completion and was slotted in after the existing reset;
+  every other send path already had the order right.
+
+  `tests/live-pty.ts` could not catch it: it asserted the marker appeared in
+  the pty stream, but the marker was quoted in the prompt, and every typed
+  character echoes into that stream — so the check passed before the model had
+  answered anything. The marker is now a word the prompt never spells, so it
+  can only have come back from the model, which is what proves the prompt
+  reached it.
+
 - **`ctrl+o` and `/thinking` did nothing to settled turns.** The render cache
   added with the message-line optimisation keyed on the message and the width
   but not on the two toggles that change a turn's lines, so flipping either one
