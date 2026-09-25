@@ -66,6 +66,7 @@ import { TuiHost } from './tui-host.ts'
 import { forkCut, lineage, projectUserTurns, rewindTarget } from './rewind.ts'
 import { renderJobs, type JobLike } from './tui/jobs.ts'
 import { groupMcpTools, renderMcp } from './tui/mcp.ts'
+import { LANGS, currentLanguage, isLang, setLanguage, type Lang } from './tui/i18n.ts'
 import { searchSessions, type SessionHit } from './cross-find.ts'
 import { sessionsRoot } from './sessions-store.ts'
 import { ApprovalPanel, QuestionsPanel, type ApprovalDecision } from './tui/panels.ts'
@@ -73,7 +74,7 @@ import { UserQuestionError } from '@deepseek-ai/dsh-user-questions'
 import type { AskUserQuestionAnswer, AskUserQuestionRequest } from '@deepseek-ai/dsh-user-questions'
 import type {} from '@deepseek-ai/dsh-user-approval'
 import {
-  HELP_TEXT,
+  keyReference,
   findMatches,
   hostLabel,
   layout,
@@ -225,6 +226,7 @@ const BUILTIN_COMMANDS: readonly PaletteCommand[] = [
   { name: 'tree', args: '', description: 'Show this session’s family tree of forks' },
   { name: 'jobs', args: '[kill <id>]', description: 'Background jobs: what is running and what finished' },
   { name: 'mcp', args: '', description: 'MCP servers whose tools are mounted here' },
+  { name: 'lang', args: '[en|zh-CN]', description: 'Interface language' },
   { name: 'fleet', args: '', description: 'Sessions across every device (ctrl+f)' },
   { name: 'peer', args: '[add|rm <host>]', description: 'Devices the fleet overview reads' },
   { name: 'about', args: '', description: 'Show version and connection information' },
@@ -496,6 +498,7 @@ class TuiApp {
     this.history.load(this.persisted.inputHistory)
     if (this.config.thinking === undefined) this.showThinking = this.persisted.thinking
     if (this.persisted.theme !== undefined) applyTheme(this.persisted.theme)
+    if (this.persisted.lang !== undefined && isLang(this.persisted.lang)) setLanguage(this.persisted.lang)
     if (this.persisted.expandTools !== undefined) this.expandTools = this.persisted.expandTools
     // Flags and remembered devices are one list from here on; a duplicate
     // between them should not make a peer appear twice in the overview.
@@ -1753,6 +1756,7 @@ class TuiApp {
         else if (kind === 'delete') this.confirmDelete(item.id, item.title)
         else if (kind === 'rewind') void this.performRewind(Number.parseInt(item.id, 10))
         else if (kind === 'stored') void this.openStoredHit(item)
+        else if (kind === 'lang') this.selectLanguage(isLang(item.id) ? item.id : 'en')
         else void this.openSession(item.id, item.title)
         break
       }
@@ -2920,6 +2924,29 @@ class TuiApp {
         this.showMcp()
         return
 
+      case 'lang': {
+        const wanted = rawInput.trim()
+        if (wanted === '') {
+          this.picker.show(
+            'lang',
+            'Language',
+            LANGS.map((entry) => ({
+              id: entry.id,
+              title: entry.label,
+              subtitle: entry.id,
+              active: entry.id === currentLanguage(),
+            })),
+          )
+          this.setStatus('')
+        } else if (isLang(wanted)) {
+          this.selectLanguage(wanted)
+        } else {
+          this.setStatus(`unknown language ${wanted} — try en or zh-CN`, true)
+        }
+        this.paint()
+        return
+      }
+
       case 'interrupt': {
         // Two ways to stop a reply. `esc` is a bid for silence: the queue
         // freezes until the user sends again. `/interrupt` is a redirection:
@@ -3001,7 +3028,7 @@ class TuiApp {
       }
 
       case 'help':
-        this.showOverlay(HELP_TEXT, 'esc to close help')
+        this.showOverlay(keyReference(), 'esc to close help')
         return
 
       case 'exit':
@@ -3309,6 +3336,16 @@ class TuiApp {
     const hit = this.storedHits[Number.parseInt(item.id, 10)]
     if (hit === undefined) return
     await this.openSession(hit.sessionId, hit.project)
+  }
+
+  /** Switch the interface language and remember it across restarts. */
+  private selectLanguage(lang: Lang): void {
+    setLanguage(lang)
+    this.persisted.lang = lang
+    this.persistSoon()
+    this.screen.invalidate()
+    this.setStatus(lang === 'zh-CN' ? '界面语言：简体中文' : 'interface language: English')
+    this.paint()
   }
 
   /**

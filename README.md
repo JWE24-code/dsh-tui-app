@@ -428,6 +428,16 @@ The choice is saved with the rest of the durable state and applied before the
 first frame, so it survives a restart. Switching repaints the whole screen at
 once, since a palette change moves the color of nearly every cell.
 
+## Interface language
+
+`/lang` switches the interface between English and Simplified Chinese and
+remembers the choice across restarts. The translated surface is the chrome you
+read: the welcome, the full key reference, the trust panels, and the footer
+hints. Operational status lines stay English on purpose — they are diagnostics
+that change with every release, and a half-translated diagnostic is worse than
+an English one. A missing key falls back to English and then to its own name,
+so nothing ever renders blank.
+
 ## MCP servers
 
 `/mcp` shows which MCP servers' tools are mounted here, grouped by server, by

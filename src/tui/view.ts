@@ -45,6 +45,7 @@ import {
   warn,
 } from './theme.ts'
 import { isImagePath, type AtMenu } from './atfile.ts'
+import { helpText, t, translate } from './i18n.ts'
 import type { PanelView } from './panels.ts'
 
 /** Most file-completion rows listed at once before the popup scrolls. */
@@ -515,12 +516,12 @@ function transcript(snapshot: Snapshot, width: number): string[] {
 /** The first-run panel, shown while the transcript is empty. */
 function welcome(snapshot: Snapshot): string[] {
   return [
-    bold('◆  DeepSeek Harness'),
+    bold(t('welcome.title')),
     '',
-    muted(`connected to ${snapshot.host}  ·  ${snapshot.modelName}`),
-    muted('sessions, compaction and tools live in the harness'),
+    muted(t('welcome.connected', { host: snapshot.host, model: snapshot.modelName })),
+    muted(t('welcome.harness')),
     '',
-    `${muted('type a message, or ')}${accent('/')}${muted(' for commands')}`,
+    `${muted(t('welcome.type'))}${accent('/')}${muted(t('welcome.forCommands'))}`,
   ]
 }
 
@@ -892,19 +893,22 @@ function footer(snapshot: Snapshot, width: number): string {
     // holds the slot for as long as the take lasts.
     right =
       snapshot.voice === 'recording'
-        ? style(`${snapshot.spinner} ● recording  ·  ctrl+v stop  ·  esc cancel`, { fg: colRose })
-        : style(`${snapshot.spinner} transcribing…`, { fg: colGold })
+        ? style(t('footer.recording', { spinner: snapshot.spinner }), { fg: colRose })
+        : style(t('footer.transcribing', { spinner: snapshot.spinner }), { fg: colGold })
   } else if (snapshot.scrollBack > 0 && !outranksScroll) {
     // Scrolled away from the newest output: say so, and say how to get back.
     right = style(
-      `↑ ${String(snapshot.scrollBack)} line${snapshot.scrollBack === 1 ? '' : 's'}  ·  ctrl+g newest`,
+      t('footer.scrolled', {
+        lines: snapshot.scrollBack,
+        s: snapshot.scrollBack === 1 ? '' : 's',
+      }),
       { fg: colGold },
     )
   } else if (snapshot.status !== '') {
     const clipped = truncate(snapshot.status, Math.max(Math.floor(width / 2), 10))
     right = snapshot.statusIsError ? warn(clipped) : ok(clipped)
   } else if (snapshot.picker.kind === 'none' && !snapshot.palette.open) {
-    right = muted('/ commands  ·  ? help  ·  ctrl+c menu')
+    right = muted(t('footer.hint'))
   }
 
   const gap = width - displayWidth(left) - displayWidth(right)
@@ -1075,52 +1079,19 @@ function panelPane(snapshot: Snapshot, geometry: Layout): string[] {
  * comes with an equal number of lines folded together further down — which is
  * why several entries below read as two keys on one row.
  */
-export const HELP_TEXT = [
-  '**Keys**',
-  '',
-  '- `enter` — send · steers into a running reply · `ctrl+j` — newline',
-  '- `↑` / `↓` on the first / last row — recall earlier prompts',
-  '- `/` — command palette · `tab` accept · `esc` dismiss',
-  '- `@` — file completion · `tab`/`enter` accept · `esc` dismiss',
-  '- `esc` — clear a search, else interrupt a reply while it is streaming',
-  '- `tab` while streaming queues · `/unqueue` discards · `/interrupt` runs them',
-  '- `ctrl+n` — new session · `ctrl+r` — resume · `ctrl+t` — toggle thinking',
-  '- `pgup` / `pgdn` — page · `shift+↑` / `shift+↓` — one line · `ctrl+g` — newest',
-  '- `ctrl+↑` / `ctrl+↓` — half page · `ctrl+u` — clear the composer',
-  '- `alt+e` — edit draft · `alt+↑`/`alt+↓` select a turn · `alt+c` — copy it',
-  '- `ctrl+o` — tool calls · `ctrl+x` — compact · `ctrl+b` — background agents',
-  '- `ctrl+y` — copy the last reply · `ctrl+f` — every device · `ctrl+v` — push to talk',
-  '- `?` — open this help on an empty composer',
-  '',
-  '**Sessions**',
-  '',
-  '- `ctrl+n` — new session · `alt+1`…`alt+9` jump · `tab` on empty cycles · `/sessions` picks',
-  '- `/close` · `/rename <t>` · `/rewind` redo · `/fork` twin · `/tree` lineage · `/jobs`',
-  '- `ctrl+a` / `ctrl+e` — start / end of line · `ctrl+w` — delete word · `ctrl+d` — delete forward',
-  '',
-  '**Fleet** (`ctrl+f`, `/fleet`) — every device running this app, by machine',
-  '',
-  '- `↑` / `↓` or `j` / `k` — move · `r` — refresh · `esc` — back · `enter` — open',
-  '- a session elsewhere copies the `ssh` that reaches it; `--peer <host>` adds one',
-  '',
-  '**Plugins** (`/plugins`) — the packages this profile composes',
-  '',
-  '- `enter` — enable or disable the selected package · restart to apply',
-  '- `/plugins add|remove <pkg>` — both confirm; install scripts run as you',
-  '',
-  '**Searching, palettes and lists**',
-  '',
-  '- `/find <text>` — search · `n` / `N` on an empty composer — next / previous',
-  '- `/theme` — pick a palette · `mono` is greyscale · in a list: type to filter',
-  '',
-  '**Decisions** — when the agent stops to ask, the panel owns the keyboard',
-  '',
-  '- approval: `1` allow once · `2` / `esc` deny · questions: `↑`/`↓`, `space`, `enter`, `tab`',
-  '- plan review: `enter` approves or keeps planning · typing is feedback',
-  '',
-  '**Commands**',
-  '',
-  'Type `/` for every command the harness has registered, its own plugins too.',
-  '',
-  '- `ctrl+c` — sessions menu · again within 1.5s — quit',
-].join('\n')
+/**
+ * The key reference.
+ *
+ * The strings live in the `i18n` catalog so one list covers both languages;
+ * this export is the English one, which the render tests assert against.
+ *
+ * The overlay shows the tail of it, so the list has a budget: a new section
+ * comes with an equal number of lines folded elsewhere. A line added to one
+ * language's copy in `i18n.ts` must be added to the other, or the two drift.
+ */
+export const HELP_TEXT = translate('en', 'help.body')
+
+/** The key reference in the active language, for the `/help` overlay. */
+export function keyReference(): string {
+  return helpText()
+}

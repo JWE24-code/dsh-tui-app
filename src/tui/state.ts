@@ -106,6 +106,7 @@ export type PickerKind =
   | 'delete'
   | 'rewind'
   | 'stored'
+  | 'lang'
   | 'none'
 
 /** One row in the picker. */

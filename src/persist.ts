@@ -39,6 +39,8 @@ export interface PersistedState {
   thinking: boolean
   /** Name of the chosen color palette; absent means the app's default. */
   theme?: string
+  /** Interface language: `en` or `zh-CN`. */
+  lang?: string
   /**
    * Whether tool calls were listed rather than summarized when the app last
    * ran; absent means the default, which is to list them.

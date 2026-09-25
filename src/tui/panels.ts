@@ -8,6 +8,8 @@
  * @module
  */
 
+import { t } from './i18n.ts'
+
 /** One selectable row in a panel. */
 export interface PanelRow {
   label: string
@@ -71,13 +73,13 @@ export class ApprovalPanel {
       .join('\n\n')
     return {
       kind: 'approval',
-      title: `Allow ${this.toolName}?`,
+      title: t('approval.title', { tool: this.toolName }),
       detail,
       rows: [
-        { label: 'Allow once', description: 'run this one call', selected: this.selected === 0 },
-        { label: 'Deny', description: 'the agent is told no', selected: this.selected === 1 },
+        { label: t('approval.allow'), description: t('approval.allowDetail'), selected: this.selected === 0 },
+        { label: t('approval.deny'), description: t('approval.denyDetail'), selected: this.selected === 1 },
       ],
-      hint: '↑↓ move · enter choose · 1 allow · 2 deny · esc denies',
+      hint: t('approval.hint'),
     }
   }
 }
@@ -252,19 +254,22 @@ export class QuestionsPanel {
     }))
     const total = this.questions.length
     const title =
-      question?.header ?? (total > 1 ? `Question ${String(this.index + 1)} of ${String(total)}` : 'Question')
+      question?.header ??
+      (total > 1
+        ? t('questions.of', { n: this.index + 1, total })
+        : t('questions.title'))
     const hint = this.isPlanReview
-      ? '↑↓ move · enter decide · type feedback to keep planning · esc back'
+      ? t('questions.hintPlan')
       : question?.multiSelect === true
-        ? '↑↓ move · space toggle · enter next · tab type an answer · esc back'
-        : '↑↓ move · enter choose · tab type an answer · esc back'
+        ? t('questions.hintMulti')
+        : t('questions.hint')
     return {
       kind: 'questions',
       title,
       detail: question?.detail === undefined ? (question?.question ?? '') : `${question.question}\n\n${question.detail}`,
       rows,
-      hint: this.index === 0 ? `${hint} · esc cancels` : hint,
-      inputLabel: 'Answer',
+      hint: this.index === 0 ? `${hint}${t('questions.cancelSuffix')}` : hint,
+      inputLabel: t('questions.answer'),
       inputText: draft.custom,
       inputFocused: this.focus === 'custom',
     }
