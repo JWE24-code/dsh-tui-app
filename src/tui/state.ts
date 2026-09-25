@@ -26,6 +26,10 @@ export interface Message {
   tools?: readonly ToolActivity[]
   /** Set when this message is a command result rather than model output. */
   command?: { name: string; ok: boolean }
+  /** Set on a user prompt steered into a still-running turn. */
+  steering?: boolean
+  /** Images sent with this user prompt, drawn as one summary line. */
+  attachments?: readonly { name: string; width: number; height: number }[]
 }
 
 /** A single tool invocation surfaced in the transcript. */
@@ -134,6 +138,12 @@ export class Composer {
   setValue(value: string): void {
     this.text = value
     this.cursor = value.length
+  }
+
+  /** Replace the whole buffer and land the cursor at an explicit offset. */
+  adopt(text: string, cursor: number): void {
+    this.text = text
+    this.cursor = Math.min(Math.max(cursor, 0), text.length)
   }
 
   reset(): void {

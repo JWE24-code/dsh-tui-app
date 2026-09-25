@@ -101,11 +101,14 @@ overrides background detection; `NO_COLOR` disables styling.
 
 | Key | Action |
 |---|---|
-| `enter` | Send · queues while a reply streams · `ctrl+j` inserts a newline |
+| `enter` | Send · steers into a running reply · `ctrl+j` inserts a newline |
 | `↑` / `↓` | On the first / last composer row, recall earlier prompts |
 | `/` | Command palette · `tab` accepts · `esc` dismisses |
+| `@` | File completion over the workspace · `tab`/`enter` accepts · `esc` dismisses |
 | `?` | Open the key reference on an empty composer |
 | `esc` | Interrupt a streaming reply |
+| `tab` | While a reply streams: queue the prompt for after it |
+| `ctrl+enter` | Interrupt the reply and send now (needs a terminal that reports it) |
 | `ctrl+n` / `ctrl+r` / `ctrl+t` | New session · resume · toggle thinking |
 | `pgup`/`pgdn` | Scroll a page · `ctrl+↑`/`ctrl+↓` half a page |
 | `shift+↑`/`shift+↓` | Scroll one line · `ctrl+g` jumps back to the newest |
@@ -125,16 +128,39 @@ In a list (`/model`, `/theme`, `/resume`): type to filter, `enter` selects, `esc
 `ctrl+n`/`ctrl+p` or the arrows move, `pgup`/`pgdn` move by ten, `home`/`end`
 jump, and `ctrl+u` clears the filter.
 
-## Queueing while a reply streams
+## Steering, queueing, and interrupting a running reply
 
-Pressing `enter` while the active session is still replying does not reject
-the prompt — it queues it. Queued prompts render as dimmed user turns under
-the streaming block, with the footer counting them (`2 queued — sends when
-the reply finishes`). The moment a turn finishes without an interrupt, the
-next queued prompt sends itself, in order, into the same session — even if
-you have switched tabs in between. Interrupting with `esc` keeps the queue;
-it flushes the next time a turn completes cleanly, `/interrupt` stops the reply and
-flushes it now, or `/unqueue` discards it.
+A prompt entered while the active session is still replying has three
+destinations, one per key:
+
+- **`enter` steers** — the prompt is delivered into the running turn and lands
+  at its next step boundary, so the agent changes course mid-answer. Steered
+  prompts render dimmed in the transcript so the interleaving reads honestly.
+- **`tab` queues** — the prompt waits under the streaming block, dimmed, with
+  the footer counting it (`2 queued — sends when the reply finishes`). The
+  moment a turn finishes without an interrupt, the next queued prompt sends
+  itself, in order, into the same session — even if you have switched tabs in
+  between.
+- **`ctrl+enter` interrupts and sends** — the running reply stops and the
+  prompt goes in immediately (the same thing `/interrupt` does to a queue).
+
+Interrupting with `esc` keeps the queue; it flushes the next time a turn
+completes cleanly, `/interrupt` stops the reply and flushes it now, and
+`/unqueue` discards it.
+
+## `@` file completion
+
+Type `@` at the start of a word for a fuzzy picker over the workspace — the
+same subsequence filter the model picker uses, shallower paths first. A query
+containing `/` (`@src/tu`) lists that one directory instead; picking a
+directory descends into it. `enter` or `tab` accepts, `esc` dismisses only the
+menu. An `@` in prose (`user@host`) never triggers it.
+
+Picking an image (png/jpeg/webp/gif) stages it as a durable attachment through
+the Harness attachment service and inserts an `[Image #N path]` token; on send
+the token leaves the text and the image goes along as a content block, with a
+`🖼 name WxH` line in the transcript. Without the attachment service the path
+is inserted as plain text instead.
 
 ## Tool calls and scrolling
 

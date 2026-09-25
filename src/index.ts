@@ -12,7 +12,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { homedir, tmpdir } from 'node:os'
-import { unlink, writeFile } from 'node:fs/promises'
+import { readFile, unlink, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
@@ -30,6 +30,7 @@ import { SessionSeq } from '@deepseek-ai/dsh-session'
 import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-cmdline'
+import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 
 import { Screen } from './tui/screen.ts'
 import type { Key } from './tui/keys.ts'
@@ -48,6 +49,17 @@ import {
   type SessionSummary,
   type ToolActivity,
 } from './tui/state.ts'
+import {
+  AtMenu,
+  activeAtToken,
+  acceptToken,
+  extractImageTokens,
+  filterFiles,
+  isImagePath,
+  isPathShaped,
+  type AtMatch,
+} from './tui/atfile.ts'
+import { FileIndex } from './file-index.ts'
 import {
   HELP_TEXT,
   findMatches,
@@ -203,6 +215,17 @@ const BUILTIN_COMMANDS: readonly PaletteCommand[] = [
  * finishes in a session you are not looking at leaves it `ready`, which is
  * what the tab bar marks and the bell announces.
  */
+/**
+ * One prompt ready to send: its text plus any images staged with it.
+ *
+ * The queue and the sender speak this shape so a queued prompt keeps its
+ * attachments instead of degrading to text.
+ */
+interface PromptDraft {
+  text: string
+  images: readonly ImageAttachmentRef[]
+}
+
 interface SessionTab {
   id: string
   agent: Agent | undefined
@@ -219,10 +242,10 @@ interface SessionTab {
   haveUsage: boolean
   scrollBack: number
   /**
-   * Prompts entered while a reply was streaming. They wait here until the
+   * Prompts queued while a reply was streaming. They wait here until the
    * turn finishes without an interrupt, then send themselves in order.
    */
-  queued: string[]
+  queued: PromptDraft[]
   /**
    * `/interrupt` was asked for on this turn: stop the reply in flight, then
    * hand control to the queue instead of freezing it like a plain `esc`.
@@ -305,6 +328,15 @@ class TuiApp {
   private readonly composer = new Composer()
   private readonly palette = new Palette()
   private readonly picker = new Picker()
+  /** The `@` file-completion menu, driven by the composer like the palette. */
+  private readonly atMenu = new AtMenu()
+  /** Workspace file listing for `@` completion, rebuilt lazily. */
+  private fileIndex: FileIndex | undefined
+  /** The token esc dismissed, so typing more reopens the menu but esc stays. */
+  private atDismissed: string | undefined
+  /** Images staged for the next send, numbered as they were picked. */
+  private stagedImages: { n: number; ref: ImageAttachmentRef }[] = []
+  private nextImageNo = 1
 
   private spinnerIndex = 0
   private spinnerTimer: NodeJS.Timeout | undefined
@@ -418,6 +450,7 @@ class TuiApp {
     const fs = this.ctx.get('fs')
     const cwd = fs === undefined ? process.cwd() : fs.processPath(await fs.resolve('.'))
     this.cwd = cwd
+    this.fileIndex = new FileIndex(cwd)
 
     // An explicit --resume names exactly one session, so it outranks whatever
     // happened to be open last time: the user has already said what they want.
@@ -895,9 +928,10 @@ class TuiApp {
       showThinking: this.showThinking,
       composer: this.composer,
       palette: this.palette,
+      atMenu: this.atMenu,
       picker: this.picker,
       scrollBack: this.tab.scrollBack,
-      queued: this.tab.queued,
+      queued: this.tab.queued.map((prompt) => prompt.text),
       sessions: this.sessionSummaries(),
       expandTools: this.expandTools,
       background: [...this.tab.background.values()],
@@ -1456,6 +1490,11 @@ class TuiApp {
         // A live microphone outranks everything else esc can dismiss: it is
         // the most modal state the app has, and the one to get out of first.
         if (this.voicePhase !== undefined) this.cancelVoice()
+        else if (this.atMenu.open) {
+          // Only the completion menu closes; the token stays for typing.
+          this.atDismissed = this.atMenu.query
+          this.atMenu.close()
+        }
         else if (this.palette.open) this.palette.close()
         else if (this.overlay !== '') this.overlay = ''
         else if (this.search !== undefined) this.clearSearch()
@@ -1471,6 +1510,12 @@ class TuiApp {
           void this.runCommand(chosen.name, rawInput)
           break
         }
+        if (this.atMenu.open) {
+          // The completion menu is offering paths: enter picks one rather
+          // than sending, the same contract the command palette has.
+          this.acceptAtCompletion()
+          break
+        }
         const text = this.composer.value().trim()
         if (text === '') break
         if (text.startsWith('/')) {
@@ -1480,20 +1525,32 @@ class TuiApp {
           break
         }
         if (this.tab.streaming) {
-          // The turn is busy: hold the prompt instead of rejecting it. It
-          // renders dimmed below the streaming block and sends itself the
-          // moment the reply finishes without an interrupt.
-          this.tab.queued.push(text)
+          // The turn is busy: steer the prompt into it at the next step
+          // boundary rather than waiting — the queued form is `tab`.
+          const prompt = this.materializePrompt()
           this.composer.reset()
-          this.history.add(text)
+          this.history.add(prompt.text)
           this.persistSoon()
-          this.setStatus(
-            `${String(this.tab.queued.length)} queued — sends when the reply finishes`,
-          )
+          void this.steer(prompt)
           break
         }
         this.composer.reset()
-        void this.send(text)
+        void this.sendPrompt(this.materializePrompt())
+        break
+      }
+
+      case 'ctrl+enter': {
+        // Interrupt-and-send: the redirection form of steering, the same
+        // thing `/interrupt` does to whatever is already queued.
+        const text = this.composer.value().trim()
+        if (text === '' || text.startsWith('/') || !this.tab.streaming) break
+        const prompt = this.materializePrompt()
+        this.composer.reset()
+        this.history.add(prompt.text)
+        this.persistSoon()
+        this.tab.queued.push(prompt)
+        this.tab.drainQueue = true
+        this.interrupt()
         break
       }
 
@@ -1503,9 +1560,23 @@ class TuiApp {
 
       case 'tab': {
         const chosen = this.palette.current()
+        if (this.atMenu.open) {
+          this.acceptAtCompletion()
+          break
+        }
         if (chosen !== undefined) {
           this.composer.setValue(`/${chosen.name} `)
           this.palette.close()
+        } else if (this.tab.streaming && this.composer.value().trim() !== '') {
+          // Queue behind the running turn: enter steers, tab waits.
+          const prompt = this.materializePrompt()
+          this.composer.reset()
+          this.history.add(prompt.text)
+          this.persistSoon()
+          this.tab.queued.push(prompt)
+          this.setStatus(
+            `${String(this.tab.queued.length)} queued — sends when the reply finishes`,
+          )
         } else if (this.composer.value() !== '') {
           // A draft plus muscle-memory tab must not switch sessions under it;
           // cycling needs an empty composer, like n/N in a search.
@@ -1523,6 +1594,7 @@ class TuiApp {
 
       case 'up':
         if (this.palette.open) this.palette.move(-1)
+        else if (this.atMenu.open) this.atMenu.move(-1)
         else if (this.history.isRecalling() || this.composer.atFirstRow(this.innerWidth())) {
           const recalled = this.history.recall(-1, this.composer.value())
           if (recalled !== undefined) this.composer.setValue(recalled)
@@ -1531,6 +1603,7 @@ class TuiApp {
 
       case 'down':
         if (this.palette.open) this.palette.move(1)
+        else if (this.atMenu.open) this.atMenu.move(1)
         else if (this.history.isRecalling() || this.composer.atLastRow(this.innerWidth())) {
           const recalled = this.history.recall(1, this.composer.value())
           if (recalled !== undefined) this.composer.setValue(recalled)
@@ -1539,10 +1612,12 @@ class TuiApp {
 
       case 'ctrl+p':
         if (this.palette.open) this.palette.move(-1)
+        else if (this.atMenu.open) this.atMenu.move(-1)
         break
 
       case 'ctrl+n':
         if (this.palette.open) this.palette.move(1)
+        else if (this.atMenu.open) this.atMenu.move(1)
         else void this.runCommand('new', '')
         break
 
@@ -1695,6 +1770,115 @@ class TuiApp {
     }
 
     this.palette.update(this.composer.value(), this.commands())
+    this.updateAtMenu()
+    this.paint()
+  }
+
+  /**
+   * Recompute the `@` file menu from the composer and cursor.
+   *
+   * A plain query fuzzy-matches the workspace listing; one containing `/`
+   * lists just that directory, the way a shell completes. The listing is
+   * refreshed lazily by the index, so this stays cheap enough for a keystroke.
+   */
+  private updateAtMenu(): void {
+    const token = activeAtToken(this.composer.value(), this.composer.position())
+    if (token === undefined) {
+      this.atMenu.close()
+      return
+    }
+    let matches: AtMatch[]
+    if (isPathShaped(token.query)) {
+      // `@src/tu` completes within `src/`; the query minus its last segment.
+      const cut = token.query.lastIndexOf('/')
+      const directory = cut === -1 ? '' : token.query.slice(0, cut)
+      const fragment = cut === -1 ? token.query : token.query.slice(cut + 1)
+      const listing = this.fileIndex?.listDir(directory) ?? { files: [] }
+      matches = listing.files
+        .filter((file) => file.path.toLowerCase().includes(fragment.toLowerCase()))
+        .map((file) => ({ path: file.path, directory: file.directory }))
+        .slice(0, 200)
+    } else {
+      matches = filterFiles(token.query, this.fileIndex?.list() ?? [])
+    }
+    this.atMenu.update(token, matches, this.atDismissed)
+  }
+
+  /** Accept the selected completion, replacing the `@` token with the path. */
+  private acceptAtCompletion(): void {
+    const chosen = this.atMenu.current()
+    const token = activeAtToken(this.composer.value(), this.composer.position())
+    if (chosen === undefined || token === undefined) {
+      this.atMenu.close()
+      return
+    }
+    this.atDismissed = undefined
+    this.atMenu.close()
+    if (chosen.directory) {
+      // Descend: keep the menu open on the directory's contents.
+      const edit = acceptToken(this.composer.value(), this.composer.position(), token, `@${chosen.path}/`)
+      this.composer.adopt(edit.text, edit.cursor)
+      this.updateAtMenu()
+      return
+    }
+    const edit = acceptToken(this.composer.value(), this.composer.position(), token, chosen.path)
+    if (isImagePath(chosen.path)) {
+      void this.stageImage(chosen.path, token, edit)
+    } else {
+      this.composer.adopt(edit.text, edit.cursor)
+    }
+  }
+
+  /**
+   * Stage one picked image as a durable attachment and insert its token.
+   *
+   * The bytes are committed to the harness attachment store immediately, so
+   * send only pairs tokens with references. Without the service — a minimal
+   * profile — the path is inserted as plain text instead, which the model can
+   * still read.
+   */
+  private async stageImage(
+    path: string,
+    token: { start: number },
+    plainEdit: { text: string; cursor: number },
+  ): Promise<void> {
+    const attachments = this.ctx.get('attachments') as AttachmentStore | undefined
+    if (attachments === undefined) {
+      this.composer.adopt(plainEdit.text, plainEdit.cursor)
+      this.setStatus('attachment service unavailable — inserted the path instead')
+      return
+    }
+    const mediaType = mediaTypeOf(path)
+    if (mediaType === undefined) {
+      this.composer.adopt(plainEdit.text, plainEdit.cursor)
+      return
+    }
+    let data: Uint8Array
+    try {
+      data = new Uint8Array(await readFile(join(this.cwd, path)))
+    } catch (error) {
+      this.composer.adopt(plainEdit.text, plainEdit.cursor)
+      this.setStatus(describeError(error), true)
+      this.paint()
+      return
+    }
+    try {
+      const ref = await attachments.saveImage({ data, mediaType, name: path })
+      const n = this.nextImageNo
+      this.nextImageNo += 1
+      this.stagedImages.push({ n, ref })
+      const edit = acceptToken(
+        plainEdit.text.slice(0, plainEdit.cursor),
+        plainEdit.cursor,
+        { start: token.start },
+        `[Image #${String(n)} ${path}]`,
+      )
+      this.composer.adopt(edit.text + plainEdit.text.slice(plainEdit.cursor), edit.cursor)
+      this.setStatus(`attached ${path} ${String(ref.width)}×${String(ref.height)}`)
+    } catch (error) {
+      this.composer.adopt(plainEdit.text, plainEdit.cursor)
+      this.setStatus(describeError(error), true)
+    }
     this.paint()
   }
 
@@ -1949,8 +2133,64 @@ class TuiApp {
    * keep writing to the conversation that queued the prompt even if the user
    * has since switched sessions.
    */
+  /**
+   * Collect the composer into a prompt: strip `[Image #N]` tokens and pair
+   * them with their staged references. Staged images the draft no longer
+   * names are dropped — deleting a token deletes the attachment.
+   */
+  private materializePrompt(): PromptDraft {
+    const extracted = extractImageTokens(this.composer.value())
+    const wanted = new Set(extracted.numbers)
+    const images = this.stagedImages
+      .filter((staged) => wanted.has(staged.n))
+      .map((staged) => staged.ref)
+    this.stagedImages = this.stagedImages.filter((staged) => wanted.has(staged.n))
+    return { text: extracted.text.trim(), images }
+  }
+
+  /**
+   * Steer a prompt into the turn that is still running.
+   *
+   * The follow-up is delivered to the agent mid-turn and lands at its next
+   * step boundary; nothing is queued and nothing waits. The transcript shows
+   * it dimmed, marked as steered, so the interleaving reads honestly.
+   */
+  private async steer(prompt: PromptDraft): Promise<void> {
+    const agent = this.tab.agent
+    if (agent === undefined) return
+    this.tab.messages.push({
+      role: 'user',
+      content: prompt.text,
+      steering: true,
+      attachments: prompt.images.map((ref) => ({
+        name: ref.name ?? 'image',
+        width: ref.width,
+        height: ref.height,
+      })),
+    })
+    this.scrollToBottom()
+    this.setStatus('steered into the running turn')
+    this.paint()
+    try {
+      agent.followup(
+        createUserMessage({
+          content: promptBlocks(prompt),
+          source: { kind: 'user' },
+        }),
+      )
+    } catch (error) {
+      this.setStatus(describeError(error), true)
+      this.paint()
+    }
+  }
+
   private async send(text: string): Promise<void> {
-    await this.sendTo(this.tab, text)
+    await this.sendTo(this.tab, { text, images: [] })
+  }
+
+  /** Send a materialized prompt to the active session. */
+  private async sendPrompt(prompt: PromptDraft): Promise<void> {
+    await this.sendTo(this.tab, prompt)
   }
 
   /**
@@ -1960,9 +2200,10 @@ class TuiApp {
    * history at the moment it was queued, so the drain must not record it a
    * second time (recall would then surface it twice).
    */
-  private async sendTo(tab: SessionTab, text: string, fromQueue = false): Promise<void> {
+  private async sendTo(tab: SessionTab, prompt: PromptDraft, fromQueue = false): Promise<void> {
     const agent = tab.agent
     if (agent === undefined) return
+    const text = prompt.text
 
     this.overlay = ''
     // Only follow the newest output when the queued conversation is the one
@@ -1972,7 +2213,18 @@ class TuiApp {
       this.history.add(text)
       this.persistSoon()
     }
-    tab.messages.push({ role: 'user', content: text })
+    tab.messages.push({
+      role: 'user',
+      content: text,
+      attachments:
+        prompt.images.length === 0
+          ? undefined
+          : prompt.images.map((ref) => ({
+              name: ref.name ?? 'image',
+              width: ref.width,
+              height: ref.height,
+            })),
+    })
     if (tab.title === '') {
       tab.title = text.slice(0, 60)
       // A tab restored with no title reads as "new session" in the bar, which
@@ -2007,7 +2259,7 @@ class TuiApp {
 
     try {
       agent.followup(
-        createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }),
+        createUserMessage({ content: promptBlocks(prompt), source: { kind: 'user' } }),
       )
       await agent.whenIdle()
     } catch (error) {
@@ -2942,6 +3194,30 @@ function labelFor(agent: Agent): string {
 }
 
 /** A one-line, human-readable form of anything thrown. */
+/** Content blocks for one prompt: its text plus any staged image blocks. */
+function promptBlocks(prompt: PromptDraft): { type: 'text'; text: string }[] | ({ type: 'text'; text: string } | { type: 'image'; attachment: ImageAttachmentRef })[] {
+  if (prompt.images.length === 0) return [{ type: 'text', text: prompt.text }]
+  return [
+    { type: 'text', text: prompt.text },
+    ...prompt.images.map(
+      (attachment): { type: 'image'; attachment: ImageAttachmentRef } => ({
+        type: 'image',
+        attachment,
+      }),
+    ),
+  ]
+}
+
+/** Map a picked image path to the media type the attachment store expects. */
+function mediaTypeOf(path: string): 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif' | undefined {
+  const extension = path.slice(path.lastIndexOf('.')).toLowerCase()
+  if (extension === '.png') return 'image/png'
+  if (extension === '.jpg' || extension === '.jpeg') return 'image/jpeg'
+  if (extension === '.webp') return 'image/webp'
+  if (extension === '.gif') return 'image/gif'
+  return undefined
+}
+
 function describeError(error: unknown): string {
   if (error instanceof Error) return error.message
   return String(error)

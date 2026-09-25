@@ -44,6 +44,10 @@ import {
   style,
   warn,
 } from './theme.ts'
+import { isImagePath, type AtMenu } from './atfile.ts'
+
+/** Most file-completion rows listed at once before the popup scrolls. */
+const MAX_AT_ROWS = 6
 
 /** Rows of chrome the layout reserves around the transcript. */
 const HEADER_ROWS = 2
@@ -112,6 +116,11 @@ export interface Snapshot {
    * Optional so every existing snapshot builder renders exactly as before.
    */
   voice?: VoicePhase
+  /**
+   * The `@` file-completion menu, while an `@` token is being typed.
+   * Optional so every existing snapshot builder renders exactly as before.
+   */
+  atMenu?: AtMenu
 }
 
 /** What push-to-talk is doing, for the footer indicator. */
@@ -123,6 +132,8 @@ export interface Layout {
   viewportRows: number
   paletteRows: number
   inputRows: number
+  /** Rows the `@` file-completion popup shows, excluding its border. */
+  atRows: number
   /** Rows the background-agent strip occupies, including any border. */
   backgroundRows: number
   /** Rows the session tab bar occupies (0 or 1). */
@@ -161,6 +172,21 @@ export function layout(snapshot: Snapshot): Layout {
 
   const paletteHeight = paletteRows > 0 ? paletteRows + POPUP_BORDER_ROWS : 0
 
+  let atRows = 0
+  if (snapshot.atMenu?.open === true) {
+    const available =
+      snapshot.rows -
+      HEADER_ROWS -
+      GAP_ROWS -
+      inputRows -
+      FOOTER_ROWS -
+      MIN_VIEWPORT_ROWS -
+      POPUP_BORDER_ROWS -
+      paletteHeight
+    atRows = Math.max(Math.min(snapshot.atMenu.matches.length, MAX_AT_ROWS, available), 0)
+  }
+  const atHeight = atRows > 0 ? atRows + POPUP_BORDER_ROWS : 0
+
   // The tab bar earns its row only once there is more than one session.
   let sessionRows = snapshot.sessions.length > 1 ? 1 : 0
 
@@ -182,6 +208,7 @@ export function layout(snapshot: Snapshot): Layout {
     sessionRows +
     (showGap ? GAP_ROWS : 0) +
     paletteHeight +
+    atHeight +
     backgroundRows +
     inputRows +
     FOOTER_ROWS
@@ -203,6 +230,7 @@ export function layout(snapshot: Snapshot): Layout {
     contentWidth: width,
     viewportRows,
     paletteRows,
+    atRows,
     inputRows,
     backgroundRows,
     sessionRows,
@@ -345,9 +373,15 @@ function renderMessage(
   const out: string[] = []
 
   if (message.role === 'user') {
-    const bar = style('▌', { fg: colAccent })
+    const bar = style('▌', { fg: message.steering === true ? colMuted : colAccent })
     for (const line of wrap(message.content.replace(/\s+$/, ''), width - 2)) {
-      out.push(`${bar} ${style(line, { fg: colText })}`)
+      out.push(message.steering === true ? `${bar} ${muted(line)}` : `${bar} ${style(line, { fg: colText })}`)
+    }
+    if ((message.attachments ?? []).length > 0) {
+      const names = (message.attachments ?? [])
+        .map((image) => `🖼 ${image.name} ${String(image.width)}×${String(image.height)}`)
+        .join('  ')
+      out.push(`${bar} ${muted(names)}`)
     }
     return out
   }
@@ -593,6 +627,32 @@ function palettePane(snapshot: Snapshot, geometry: Layout): string[] {
   })
 
   return box(body, inner, colAccent)
+}
+
+/**
+ * The `@` file-completion popup drawn between the palette and the composer.
+ *
+ * Directories carry a trailing slash and images a mark, so the shape of the
+ * workspace is legible without color. The row count is bounded by the layout,
+ * so a huge workspace scrolls the list rather than the transcript.
+ */
+function atPane(snapshot: Snapshot, geometry: Layout): string[] {
+  const menu = snapshot.atMenu
+  const rows = geometry.atRows
+  if (menu === undefined || !menu.open || rows < 1) return []
+  const inner = Math.max(geometry.contentWidth - 4, 10)
+
+  const start = menu.selected >= rows ? menu.selected - rows + 1 : 0
+  const visible = menu.matches.slice(start, start + rows)
+
+  const body = visible.map((match, index) => {
+    const label = match.directory ? `${match.path}/` : match.path
+    const marked = isImagePath(label) ? `🖼 ${label}` : `  ${label}`
+    const padded = padEnd(truncate(marked, inner), inner)
+    return start + index === menu.selected ? selected(padded) : muted(padded)
+  })
+
+  return box(body, inner, colBorder)
 }
 
 /**
@@ -889,6 +949,8 @@ export function render(snapshot: Snapshot): {
   const palette = palettePane(snapshot, geometry)
   rows.push(...palette)
 
+  rows.push(...atPane(snapshot, geometry))
+
   const composer = composerPane(snapshot, geometry)
   const composerTop = rows.length
   rows.push(...composer.lines)
@@ -920,11 +982,12 @@ export function render(snapshot: Snapshot): {
 export const HELP_TEXT = [
   '**Keys**',
   '',
-  '- `enter` — send · queues while a reply streams · `ctrl+j` — newline',
+  '- `enter` — send · steers into a running reply · `ctrl+j` — newline',
   '- `↑` / `↓` on the first / last row — recall earlier prompts',
   '- `/` — command palette · `tab` accept · `esc` dismiss',
+  '- `@` — file completion · `tab`/`enter` accept · `esc` dismiss',
   '- `esc` — clear a search, else interrupt a reply while it is streaming',
-  '- `enter` while streaming queues · `/unqueue` discards · `/interrupt` runs them',
+  '- `tab` while streaming queues · `/unqueue` discards · `/interrupt` runs them',
   '- `ctrl+n` — new session · `ctrl+r` — resume · `ctrl+t` — toggle thinking',
   '- `pgup` / `pgdn` — page · `shift+↑` / `shift+↓` — one line · `ctrl+g` — newest',
   '- `ctrl+↑` / `ctrl+↓` — half page · `ctrl+u` — clear the composer',

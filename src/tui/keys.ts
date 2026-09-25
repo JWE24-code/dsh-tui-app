@@ -38,6 +38,9 @@ const TILDE_NAMES: Record<string, string> = {
   '6': 'pagedown',
   '7': 'home',
   '8': 'end',
+  // Enter as a tilde code, so terminals speaking CSI-u can report
+  // ctrl+enter (`ESC [ 13;5 ~`) for interrupt-and-send.
+  '13': 'enter',
 }
 
 /** Modifier bitmask from a CSI parameter, per the xterm convention. */
