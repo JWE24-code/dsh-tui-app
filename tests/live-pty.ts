@@ -20,8 +20,21 @@ import { stripAnsi } from '../src/tui/text.ts'
 
 const ROOT = resolve(import.meta.dirname, '..')
 const PROFILE = process.env['DSH_TUI_LIVE_PROFILE'] ?? 'tui'
-const PROMPT = process.env['DSH_TUI_LIVE_PROMPT'] ?? 'reply with exactly: READY'
-const MARKER = process.env['DSH_TUI_LIVE_EXPECT'] ?? 'READY'
+/**
+ * The marker must not be derivable from the prompt.
+ *
+ * `output` is the raw pty stream, and every character typed into the composer
+ * echoes into it — so a marker quoted in the prompt ("reply with exactly:
+ * READY") is already present in the stream before the model has answered
+ * anything. That is not a hypothetical: it let a blank-prompt bug pass this
+ * suite, where the composer was cleared before the draft was read, the
+ * transcript committed an empty turn, and the model was asked nothing at all.
+ * Asking for a word the prompt never spells means the marker can only have
+ * come back from the model, which in turn proves the prompt reached it.
+ */
+const PROMPT =
+  process.env['DSH_TUI_LIVE_PROMPT'] ?? 'reply with exactly one word: the number after three, spelled out in capitals'
+const MARKER = process.env['DSH_TUI_LIVE_EXPECT'] ?? 'FOUR'
 const TIMEOUT_MS = Number.parseInt(process.env['DSH_TUI_LIVE_TIMEOUT_MS'] ?? '180000', 10)
 
 let checks = 0
@@ -99,9 +112,11 @@ async function main(): Promise<void> {
       console.error('--- last output before giving up ---')
       console.error(tail)
     }
+    // Because the marker is a word the prompt never spells, this is also the
+    // proof that the draft survived the composer being cleared and reached the
+    // model — an empty turn comes back as a generic greeting, never `FOUR`.
     check(`the model's answer reaches a painted frame (${MARKER})`, answered)
     check('the turn left the composer ready for the next prompt', stripAnsi(output).includes('Ask the harness'))
-    check('the transcript kept the prompt', stripAnsi(output).includes(PROMPT.slice(0, 12)))
 
     // Command surfaces, exercised against the real booted app rather than a
     // stub: each overlay has to appear with its own content, and esc has to
