@@ -1,4 +1,4 @@
-# dsh-tui-app
+# dsh-tui
 
 An opencode-style terminal app for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness),
 packaged as a Harness bundle. It is the rebuild of an earlier standalone Go
@@ -45,12 +45,12 @@ From npm — one command, then the launcher installs the profile and hands the
 terminal to dsh:
 
 ```sh
-npm install -g @jwe24-code/dsh-tui-app
-dsh-tui-app
+npm install -g @jwe24-code/dsh-tui
+dsh-tui
 ```
 
-`dsh-tui-app install` only refreshes the profile, and
-`dsh plugin --profile tui add @jwe24-code/dsh-tui-app` works too. `/update`
+`dsh-tui install` only refreshes the profile, and
+`dsh plugin --profile tui add @jwe24-code/dsh-tui` works too. `/update`
 inside the app checks npm and upgrades the global install.
 
 The installer also links the installed Harness's own `@deepseek-ai` packages
@@ -86,7 +86,7 @@ $DSH_HOME/profiles/tui/         # $DSH_HOME defaults to ~/.dsh
 with the bundle order the profile composes:
 
 ```json
-"dsh": { "profile": { "bundles": ["@deepseek-ai/dsh-base", "dsh-tui-app"] } }
+"dsh": { "profile": { "bundles": ["@deepseek-ai/dsh-base", "dsh-tui"] } }
 ```
 
 Pass a name to install under a different profile: `npm run install-profile -- chat`.
@@ -661,7 +661,7 @@ src/
 `src/tui/` imports nothing from the Harness and nothing from npm, which is why
 it can be tested without a profile. `src/tui-host.ts` is the one module that
 does import Cordis, because it *is* the seam (exported as
-`@jwe24-code/dsh-tui-app/tui-host`); the shortcut registry and status line it
+`@jwe24-code/dsh-tui/tui-host`); the shortcut registry and status line it
 delegates to are plain classes in `src/tui-host-core.ts`, which the suites
 import instead, so both are tested without a context — and re-exported from the
 seam, so a plugin still needs the one import.

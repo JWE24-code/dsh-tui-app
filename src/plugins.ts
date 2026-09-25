@@ -17,7 +17,7 @@
  * Nothing here takes effect until the app is restarted: the bundle sets
  * `patchReload: "startup"`, so a layer list edited under a running terminal is
  * read at the next launch and not before.
- * @module dsh-tui-app/plugins
+ * @module dsh-tui/plugins
  */
 
 import { execFile } from 'node:child_process'
@@ -28,7 +28,7 @@ import { join } from 'node:path'
 export const BASE_BUNDLE = '@deepseek-ai/dsh-base'
 
 /** This app's own package, as the profile's dependency list spells it. */
-export const APP_PACKAGE = '@jwe24-code/dsh-tui-app'
+export const APP_PACKAGE = '@jwe24-code/dsh-tui'
 
 /**
  * The name this package shipped under before the scoped rename.
@@ -37,7 +37,7 @@ export const APP_PACKAGE = '@jwe24-code/dsh-tui-app'
  * own bundle as protected — otherwise the pane offers to disable the terminal
  * it is running inside.
  */
-export const LEGACY_APP_PACKAGE = 'dsh-tui-app'
+export const LEGACY_APP_PACKAGE = 'dsh-tui'
 
 /**
  * Packages the picker lists but refuses to change.

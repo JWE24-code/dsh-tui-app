@@ -63,13 +63,13 @@ try {
 
   // Install it the way a user would, into a prefix of its own.
   run('npm', ['install', '--prefix', PREFIX, '-g', tarball], { cwd: ROOT })
-  const installed = join(PREFIX, 'lib', 'node_modules', '@jwe24-code', 'dsh-tui-app')
+  const installed = join(PREFIX, 'lib', 'node_modules', '@jwe24-code', 'dsh-tui')
   check('the package installs under its scoped name', existsSync(join(installed, 'package.json')))
-  check('the bin ships', existsSync(join(installed, 'bin', 'dsh-tui-app.mjs')))
+  check('the bin ships', existsSync(join(installed, 'bin', 'dsh-tui.mjs')))
 
   // Run the launcher's install against a fresh Harness home.
   const environment = { DSH_HOME: HOME }
-  const installOutput = run('node', [join(installed, 'bin', 'dsh-tui-app.mjs'), 'install'], {
+  const installOutput = run('node', [join(installed, 'bin', 'dsh-tui.mjs'), 'install'], {
     env: environment,
     cwd: installed,
   })
@@ -80,7 +80,7 @@ try {
   check(
     'the profile composes dsh-base then this bundle',
     manifest.dsh?.profile?.bundles?.join(',') ===
-      '@deepseek-ai/dsh-base,@jwe24-code/dsh-tui-app',
+      '@deepseek-ai/dsh-base,@jwe24-code/dsh-tui',
   )
 
   // The regression this gate exists for: the linked package must be able to
@@ -93,7 +93,7 @@ try {
   // Compose the tree, then boot. A resolve failure shows up here as a crash;
   // the app's own non-TTY guard is the success signal.
   const composed = run('dsh', ['--profile', 'tui', '--dump-config'], { env: environment })
-  check('the profile composes', composed.includes('@jwe24-code/dsh-tui-app'))
+  check('the profile composes', composed.includes('@jwe24-code/dsh-tui'))
   const help = run('dsh', ['--profile', 'tui', '--help'], { env: environment })
   check("the app's own flags are parsed", help.includes('--peer') && help.includes('--mouse'))
 

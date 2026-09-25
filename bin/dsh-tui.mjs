@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * The `dsh-tui-app` launcher: install (or refresh) the `tui` profile, then
+ * The `dsh-tui` launcher: install (or refresh) the `tui` profile, then
  * hand off to `dsh --profile tui`.
  *
  * Works identically from a git checkout and a global npm install — the
@@ -27,7 +27,7 @@ try {
 }
 
 if (command === 'install') {
-  console.log('dsh-tui-app: profile installed — start it with `dsh --profile tui`')
+  console.log('dsh-tui: profile installed — start it with `dsh --profile tui`')
   process.exit(0)
 }
 
