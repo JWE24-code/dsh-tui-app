@@ -21,6 +21,7 @@ import {
   formatTokens,
   estimateTokens,
   fuzzyMatch,
+  ownerOfDelegated,
 } from '../src/tui/state.ts'
 import { displayWidth, truncate, wrap, stripAnsi, padEnd } from '../src/tui/text.ts'
 import { renderMarkdown } from '../src/tui/markdown.ts'
@@ -761,6 +762,38 @@ check(
   !scrolledHint.some((line) => line.includes('ctrl+c menu')) &&
     scrolledHint.some((line) => line.includes('ctrl+g newest')),
 )
+
+// ------------------------------------------------- who owns a delegated agent
+
+// A subagent belongs to the conversation that asked for it. This used to be one
+// list shared by the whole app, so another session's delegated work -- and its
+// foreground agent -- showed up in whichever tab happened to be on screen.
+{
+  const idle = [
+    { id: 's-1', streaming: false },
+    { id: 's-2', streaming: false },
+    { id: 's-3', streaming: false },
+  ]
+  const busy = [
+    { id: 's-1', streaming: false },
+    { id: 's-2', streaming: true },
+    { id: 's-3', streaming: false },
+  ]
+
+  check('fork lineage wins when the parent is open', ownerOfDelegated(busy, 's-3', 0) === 2)
+  check('lineage naming a closed session falls through', ownerOfDelegated(busy, 's-gone', 0) === 1)
+  check('the streaming session claims delegated work', ownerOfDelegated(busy, undefined, 0) === 1)
+  check('with nothing streaming the active session takes it', ownerOfDelegated(idle, undefined, 2) === 2)
+  check('an out-of-range active index still resolves', ownerOfDelegated(idle, undefined, 99) === 0)
+  check('a negative active index still resolves', ownerOfDelegated(idle, undefined, -1) === 0)
+  check('no sessions means no owner', ownerOfDelegated([], undefined, 0) === -1)
+
+  // The owner must not depend on which tab is being drawn: that was the bug.
+  check(
+    'the owner is the same whichever session is on screen',
+    ownerOfDelegated(busy, undefined, 0) === ownerOfDelegated(busy, undefined, 2),
+  )
+}
 
 // eslint-disable-next-line no-console
 console.log(`ok - ${String(checks)} checks passed`)

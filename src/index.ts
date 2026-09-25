@@ -32,6 +32,7 @@ import {
   InputHistory,
   Palette,
   Picker,
+  ownerOfDelegated,
   type Message,
   type PaletteCommand,
   type BackgroundAgent,
@@ -165,6 +166,15 @@ interface SessionTab {
   modelName: string
   /** Context capacity resolved for this session's model. */
   contextLimit: number
+  /**
+   * Delegated agents this session spawned, keyed by their session id.
+   *
+   * Per session rather than per app: a subagent belongs to the conversation
+   * that asked for it, and showing every session's delegated work in whichever
+   * tab happens to be on screen makes the strip describe the machine instead
+   * of the conversation.
+   */
+  background: Map<string, BackgroundAgent>
 }
 
 /** Create an empty session record. */
@@ -189,6 +199,7 @@ function newTab(id: string): SessionTab {
     selection: { current: undefined, assembled: undefined },
     modelName: '',
     contextLimit: 0,
+    background: new Map(),
   }
 }
 
@@ -227,7 +238,6 @@ class TuiApp {
   private expandTools = false
   private expandBackground = false
   /** Live agents other than the foreground one, keyed by session id. */
-  private readonly background = new Map<string, BackgroundAgent>()
 
   /** Sent prompts, recalled with ↑/↓ on the composer's outer rows. */
   private readonly history = new InputHistory()
@@ -301,6 +311,7 @@ class TuiApp {
       const sessionId = brandString<SessionId>(this.config.resumeSessionId)
       const resumed = await agents.resume({ resumeSessionId: sessionId, agentOptions, setup })
       this.tab.agent = resumed.agent
+      this.adoptForeground(this.tab)
       this.tab.id = String(sessionId)
       this.tab.title = this.config.resumeSessionId
       this.tab.messages = readHistory(this.tab.agent.session)
@@ -308,6 +319,7 @@ class TuiApp {
       const sessionId = brandString<SessionId>(`session-${randomUUID()}`)
       const created = await agents.create({ sessionId, meta: { cwd }, agentOptions, setup })
       this.tab.agent = created.agent
+      this.adoptForeground(this.tab)
       this.tab.id = String(sessionId)
     }
     await this.tab.agent.whenIdle()
@@ -389,6 +401,42 @@ class TuiApp {
   }
 
   /**
+   * Which session a delegated agent belongs to.
+   *
+   * The Harness does not hand us a delegation parent: `parentSession` on the
+   * header is fork lineage, which a subagent need not have. What is reliable
+   * is timing -- delegated work is spawned while its parent's turn runs -- so
+   * the streaming session claims it, and `parentSession` is honoured first on
+   * the occasions it does point at a session we have open. With neither, the
+   * session on screen is the only honest guess.
+   */
+  private ownerOf(agent: Agent): SessionTab {
+    const parent = agent.session.header.parentSession
+    const index = ownerOfDelegated(
+      this.tabs,
+      parent === undefined ? undefined : String(parent),
+      this.active,
+    )
+    return this.tabs[index] ?? this.tab
+  }
+
+  /**
+   * Claim an agent as a session's foreground, retracting it from every
+   * delegated list.
+   *
+   * `agent/created` fires before the caller can store the agent on its tab, so
+   * a newly opened session is briefly indistinguishable from delegated work
+   * and gets banked as such. Nothing retracted it afterwards, which is exactly
+   * how a second session's own agent came to sit in the first session's strip.
+   */
+  private adoptForeground(tab: SessionTab): void {
+    const agent = tab.agent
+    if (agent === undefined) return
+    const id = String(agent.session.header.id)
+    for (const other of this.tabs) other.background.delete(id)
+  }
+
+  /**
    * Track every other live agent, so delegated work is visible.
    *
    * The transcript only ever shows the foreground agent. A turn that spawns
@@ -397,12 +445,25 @@ class TuiApp {
    */
   private subscribeToAgents(): void {
     const note = (agent: Agent, status: 'idle' | 'running'): void => {
-      if (agent === this.tab.agent) return
       const header = agent.session.header
+      // Ask the session what it is rather than inferring it. A delegated child
+      // is marked as one; a session the user opened is not, whoever happens to
+      // be on screen. The old test -- "not the active tab's agent" -- called
+      // every other open session's foreground agent delegated work, and it
+      // also raced: agent/created fires before the caller can store the agent
+      // on its tab, so even the first session briefly qualified.
+      if (header.origin !== 'subagent' && (header.delegationDepth ?? 0) === 0) return
+      if (this.tabs.some((tab) => tab.agent === agent)) return
+
       const id = String(header.id)
-      const existing = this.background.get(id)
+      const owner = this.ownerOf(agent)
+      // A refreshed status must not duplicate the row into a second session if
+      // the owner is resolved differently later in the turn.
+      const held = this.tabs.find((tab) => tab.background.has(id))
+      const target = held ?? owner
+      const existing = target.background.get(id)
       if (existing === undefined) {
-        this.background.set(id, {
+        target.background.set(id, {
           id,
           label: labelFor(agent),
           status,
@@ -427,8 +488,9 @@ class TuiApp {
     )
     this.disposers.push(
       this.ctx.on('agent/disposed', (payload) => {
-        if (payload.agent === this.tab.agent) return
-        this.background.delete(String(payload.agent.session.header.id))
+        if (this.tabs.some((tab) => tab.agent === payload.agent)) return
+        const id = String(payload.agent.session.header.id)
+        for (const tab of this.tabs) tab.background.delete(id)
         this.paint()
       }),
     )
@@ -605,7 +667,7 @@ class TuiApp {
       queued: this.tab.queued,
       sessions: this.sessionSummaries(),
       expandTools: this.expandTools,
-      background: [...this.background.values()],
+      background: [...this.tab.background.values()],
       expandBackground: this.expandBackground,
       elapsedSeconds:
         this.tab.streamStartedAt === 0 ? 0 : Math.floor((Date.now() - this.tab.streamStartedAt) / 1000),
@@ -1083,7 +1145,7 @@ class TuiApp {
         break
 
       case 'ctrl+b':
-        if (this.background.size === 0) {
+        if (this.tab.background.size === 0) {
           this.setStatus('no background agents running')
           break
         }
@@ -1635,6 +1697,7 @@ class TuiApp {
       // A new session is an additional one: the conversation that was open
       // keeps running, and its reply will still arrive and ring.
       tab.agent = created.agent
+      this.adoptForeground(tab)
       this.tabs.push(tab)
       this.active = this.tabs.length - 1
       this.overlay = ''
@@ -1872,6 +1935,7 @@ class TuiApp {
         setup: this.selectionSetupFor(this.tab),
       })
       this.tab.agent = resumed.agent
+      this.adoptForeground(this.tab)
       await this.tab.agent.whenIdle()
       this.tab.title = title
       this.refreshFromSession()

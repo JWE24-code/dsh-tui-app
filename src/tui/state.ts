@@ -463,6 +463,40 @@ export class Picker {
   }
 }
 
+/** The minimum a session has to expose for {@link ownerOfDelegated}. */
+export interface DelegationHost {
+  id: string
+  streaming: boolean
+}
+
+/**
+ * Which open session a delegated agent belongs to, as an index.
+ *
+ * The Harness does not report a delegation parent, so this is a rule rather
+ * than a lookup, and it is worth stating plainly because the alternative --
+ * one list shared by every session -- is what made another conversation's
+ * subagents appear in whichever tab was on screen.
+ *
+ * Fork lineage wins when it names a session that is actually open. Otherwise
+ * timing decides: delegated work is spawned while its parent's turn runs, so
+ * the streaming session claims it. With neither, the active session is the
+ * only honest guess.
+ */
+export function ownerOfDelegated(
+  sessions: readonly DelegationHost[],
+  parentSessionId: string | undefined,
+  activeIndex: number,
+): number {
+  if (sessions.length === 0) return -1
+  if (parentSessionId !== undefined) {
+    const byLineage = sessions.findIndex((session) => session.id === parentSessionId)
+    if (byLineage !== -1) return byLineage
+  }
+  const streaming = sessions.findIndex((session) => session.streaming)
+  if (streaming !== -1) return streaming
+  return activeIndex >= 0 && activeIndex < sessions.length ? activeIndex : 0
+}
+
 /** Format a token count the way a status bar wants it: 834, 1.2K, 64K. */
 export function formatTokens(count: number): string {
   if (count < 1000) return String(count)
