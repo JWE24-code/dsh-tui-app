@@ -80,6 +80,10 @@ function chunk(index: number): StreamChunkLike {
 
   projectStreamChunk(s, chunk(5))
   check('argument delta does not add a second row', s.streamingTools.length === 1)
+  check(
+    'argument delta shows what the call does as it streams',
+    s.streamingTools[0]?.detail === 'x',
+  )
 }
 
 // --- a settled block flips the row to done ---------------------------------
@@ -90,6 +94,22 @@ function chunk(index: number): StreamChunkLike {
   projectStreamChunk(s, chunk(6))
   check('block-end settles the running row', s.streamingTools.length === 1 && s.streamingTools[0]?.status === 'ok')
   check('block-end keeps the call id', s.streamingTools[0]?.id === 'call-1')
+}
+
+// --- the settled block's complete arguments become the row's detail ---------
+
+{
+  const s = surface()
+  projectStreamChunk(s, chunk(4))
+  projectStreamChunk(s, chunk(5))
+  projectStreamChunk(s, {
+    type: 'block-end',
+    block: { type: 'tool-call', id: 'call-1', name: 'grep', arguments: '{"pattern":"TODO"}' },
+  })
+  check(
+    'block-end summarizes the complete arguments',
+    s.streamingTools[0]?.detail === 'TODO',
+  )
 }
 
 // --- a block-end with no prior delta still records the call ---------------

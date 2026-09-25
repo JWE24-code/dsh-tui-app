@@ -477,6 +477,56 @@ const single = assertFrame(
 check('a single call is named', single.some((line) => line.trim() === '✓ bash'))
 check('a single call offers no expansion hint', !single.some((line) => line.includes('ctrl+o')))
 
+// A call says what it does, and its outcome sits under it — in flow.
+const narrated = assertFrame(
+  'narrated tools',
+  snapshot({
+    expandTools: true,
+    messages: [
+      {
+        role: 'assistant',
+        content: 'done',
+        tools: [
+          { name: 'bash', status: 'ok' as const, detail: 'docker ps --format {{.Names}}', result: 'webui postgres' },
+          { name: 'grep', status: 'error' as const, detail: 'pattern: TODO', result: 'no matches' },
+        ],
+      },
+    ],
+  }),
+).map((line) => stripAnsi(line))
+check('an expanded call shows what it does', narrated.some((line) => line.includes('docker ps')))
+check(
+  'a result sits under its own call',
+  narrated.some((line) => line.trim() === '↳ webui postgres'),
+)
+check('an errored call shows its outcome', narrated.some((line) => line.includes('no matches')))
+
+const singleNarrated = assertFrame(
+  'single narrated tool',
+  snapshot({
+    messages: [
+      {
+        role: 'assistant',
+        content: 'done',
+        tools: [{ name: 'bash', status: 'ok' as const, detail: 'docker ps', result: 'webui' }],
+      },
+    ],
+  }),
+).map((line) => stripAnsi(line))
+check('a single collapsed call shows its command', singleNarrated.some((line) => line.includes('docker ps')))
+check('a single collapsed call shows its outcome', singleNarrated.some((line) => line.includes('webui')))
+
+const inFlightNarrated = assertFrame(
+  'running narrated tool',
+  snapshot({
+    messages: [],
+    streaming: true,
+    streamingText: '',
+    streamingTools: [{ name: 'bash', status: 'running' as const, detail: 'docker ps' }],
+  }),
+).map((line) => stripAnsi(line))
+check('a running call shows what it is doing', inFlightNarrated.some((line) => line.includes('docker ps')))
+
 // --------------------------------------------------------------- scrolling
 
 const tall = snapshot({

@@ -7,6 +7,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Tool calls that say what they do** — an expanded tool call shows its
+  arguments as one readable line (the command for `bash`, the path for edits,
+  the query for searches, the first argument otherwise), and the line appears
+  live while the arguments stream, not only after the call settles. The
+  in-flight spinner line and a lone settled call show it too. A call's
+  outcome now rides in the transcript flow: `tool/result` events from the
+  session log settle each row — ✓, ✗, and a one-line result or error under
+  the very call that produced it — instead of leaving feedback detached from
+  whatever it answers.
 - **Session renaming** — `/rename <title>` pins a name onto the active
   session in the Harness's own durable log (a `session/title` event with the
   `user` source), so the tab bar, the resume picker, and any other dsh client

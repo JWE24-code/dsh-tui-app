@@ -243,9 +243,11 @@ interface ToolStyle {
  * Tool activity for one turn.
  *
  * Collapsed is the default: a long agent turn is mostly `bash bash grep read`,
- * and a column of those pushes the actual answer off the screen. While the turn
- * runs it is one animated line naming the tool in flight; once settled it is
- * one line with a count and a breakdown. `ctrl+o` expands the full list.
+ * and a column of those pushes the actual answer off the screen. While the
+ * turn runs it is one animated line naming the tool in flight and what it is
+ * doing; once settled it is one line with a count and a breakdown. `ctrl+o`
+ * expands the full list, each call followed by its outcome in flow — the
+ * result line sits under the very call that produced it.
  */
 function renderTools(
   tools: readonly ToolActivity[],
@@ -261,23 +263,40 @@ function renderTools(
         ? ok('✓')
         : warn('✗')
 
+  /** The "what it does" tail of a head line: the command, the path, the query. */
+  const detailPart = (tool: ToolActivity): string =>
+    tool.detail === undefined || tool.detail === ''
+      ? ''
+      : muted(`  ${truncate(tool.detail, Math.max(width - displayWidth(tool.name) - 8, 8))}`)
+
+  /** One call's head line: mark, name, and what the call does. */
+  const headLine = (tool: ToolActivity): string =>
+    `${mark(tool)} ${style(tool.name, { fg: colText })}${detailPart(tool)}`
+
+  /** The call's outcome, if any, to sit under its own head line — in flow. */
+  const outcomeLine = (tool: ToolActivity): string | undefined =>
+    tool.result === undefined || tool.result === ''
+      ? undefined
+      : (tool.status === 'error' ? warn : muted)(
+          `  ↳ ${truncate(tool.result, Math.max(width - 4, 8))}`,
+        )
+
+  const linesOf = (tool: ToolActivity): string[] => {
+    const under = outcomeLine(tool)
+    return under === undefined ? [headLine(tool)] : [headLine(tool), under]
+  }
+
   if (toolStyle.expand) {
-    return tools.map((tool) => {
-      const detail =
-        tool.detail === undefined || tool.detail === ''
-          ? ''
-          : muted(`  ${truncate(tool.detail, Math.max(width - displayWidth(tool.name) - 8, 8))}`)
-      return `${mark(tool)} ${style(tool.name, { fg: colText })}${detail}`
-    })
+    return tools.flatMap(linesOf)
   }
 
   const running = tools.find((tool) => tool.status === 'running')
   const failed = tools.filter((tool) => tool.status === 'error').length
 
   if (running !== undefined) {
-    // In flight: spinner, the tool in hand, how many are done, how long.
+    // In flight: spinner, the tool in hand doing something, progress, time.
     const done = tools.filter((tool) => tool.status !== 'running').length
-    const parts = [style(running.name, { fg: colText })]
+    const parts = [headLine(running)]
     if (done > 0) parts.push(muted(`${done} done`))
     if (toolStyle.elapsed > 0) parts.push(muted(`${formatElapsed(toolStyle.elapsed)}`))
     return [`${style(toolStyle.spinner, { fg: colAccent })} ${parts.join(muted('  ·  '))}`]
@@ -286,11 +305,17 @@ function renderTools(
   const head = failed > 0 ? warn('✗') : ok('✓')
   const tail = failed > 0 ? warn(`  ${String(failed)} failed`) : ''
 
-  // A single call needs no summarizing: naming it is shorter than counting it,
-  // and there is nothing hidden to advertise an expansion for.
+  // A single call needs no summarizing: it says what it did and what came
+  // back, which is shorter than counting it and hides nothing an expansion
+  // would reveal.
   const only = tools[0]
   if (tools.length === 1 && only !== undefined) {
-    return [truncate(`${head} ${style(only.name, { fg: colText })}${tail}`, width)]
+    const first = truncate(
+      `${head} ${style(only.name, { fg: colText })}${detailPart(only)}${tail}`,
+      width,
+    )
+    const under = outcomeLine(only)
+    return under === undefined ? [first] : [first, under]
   }
 
   // Settled: one line, with the busiest tools named.

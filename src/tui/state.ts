@@ -35,6 +35,8 @@ export interface ToolActivity {
   name: string
   status: 'running' | 'ok' | 'error'
   detail?: string
+  /** One line of what came back, rendered under the call it belongs to. */
+  result?: string
 }
 
 /**

@@ -59,6 +59,7 @@ import {
 } from './tui/view.ts'
 import { activeTheme, applyTheme, listThemes } from './tui/theme.ts'
 import { projectStreamChunk } from './tui/stream.ts'
+import { applyToolEvent } from './tui/tooldetail.ts'
 import { transcriptMarkdown } from './tui/export.ts'
 import { deleteStoredSessionDir, findStoredSessionDir } from './sessions-store.ts'
 import { planRename, snapshotTitle } from './rename.ts'
@@ -218,6 +219,11 @@ interface SessionTab {
   /** `ready` means a turn finished and you have not looked since. */
   status: SessionStatus
   /**
+   * Session-log seq already folded into this tab's tool rows. Only the events
+   * appended after the turn began are this turn's; the marker skips history.
+   */
+  logSyncedSeq: number
+  /**
    * This session's own model selection. Each Agent gets the ref of the tab
    * that created it, so `/model` in one conversation never reroutes another.
    */
@@ -256,6 +262,7 @@ function newTab(id: string): SessionTab {
     scrollBack: 0,
     queued: [],
     status: 'idle',
+    logSyncedSeq: 0,
     selection: { current: undefined, assembled: undefined },
     modelName: '',
     contextLimit: 0,
@@ -680,7 +687,29 @@ class TuiApp {
   private onFrame(tab: SessionTab, frame: AssistantStreamFrame): void {
     if (frame.type !== 'chunk') return
     projectStreamChunk(tab, frame.chunk)
+    this.syncToolLog(tab)
     if (tab === this.tabs[this.active]) this.paint()
+  }
+
+  /**
+   * Fold session-log events the stream cannot see onto the turn's tool rows.
+   *
+   * `tool/call` says what a call does; `tool/result` settles it — ok or
+   * error — and attaches its outcome under that very row, so feedback rides
+   * in the transcript flow instead of a detached status line. Called from the
+   * frame handler and the spinner tick: results land while no chunk streams.
+   */
+  private syncToolLog(tab: SessionTab): void {
+    const session = tab.agent?.session
+    if (session === undefined) return
+    const length = session.seq
+    while (tab.logSyncedSeq < length) {
+      const event = session.eventAt(SessionSeq(tab.logSyncedSeq)) as
+        | { type?: string; data?: Record<string, unknown> }
+        | undefined
+      if (event !== undefined) applyToolEvent(tab.streamingTools, event)
+      tab.logSyncedSeq += 1
+    }
   }
 
   /**
@@ -882,6 +911,9 @@ class TuiApp {
     if (this.spinnerTimer !== undefined) return
     this.spinnerTimer = setInterval(() => {
       this.spinnerIndex += 1
+      // Tool results arrive between model streams, when no frame fires; the
+      // tick is what keeps every streaming tab's rows settled.
+      for (const open of this.tabs) if (open.streaming) this.syncToolLog(open)
       this.paint()
     }, SPINNER_INTERVAL)
     // The timer must not hold the process open on its own.
@@ -1813,6 +1845,10 @@ class TuiApp {
     tab.streamingText = ''
     tab.streamingReasoning = ''
     tab.streamingTools = []
+    // Tool results land in the session log between model streams, where no
+    // frame fires; the sync reads them from here on. Events before this point
+    // belong to earlier turns and must not color this one's rows.
+    tab.logSyncedSeq = tab.agent === undefined ? 0 : tab.agent.session.seq
     this.setSessionStatus(tab, 'running')
     this.setStatus('')
     if (tab.queued.length > 0) {
@@ -1841,6 +1877,10 @@ class TuiApp {
       tab.streamStartedAt = 0
       this.releaseSpinner()
       // Commit whatever streamed, even on an interrupt, so nothing is lost.
+      // One last log sync first: the final tool results may have landed after
+      // the last frame, and the committed rows are what /export and a restart
+      // will show.
+      this.syncToolLog(tab)
       const content = tab.streamingText.trim()
       const reasoning = tab.streamingReasoning.trim()
       if (content !== '' || reasoning !== '' || tab.streamingTools.length > 0) {

@@ -12,6 +12,14 @@
  */
 
 import type { ToolActivity } from './state.ts'
+import { describeToolCall } from './tooldetail.ts'
+
+/**
+ * Argument text accumulated per live row, keyed weakly so committed rows
+ * carry no buffer of their own. A settled block's complete `arguments`
+ * replace whatever streamed in.
+ */
+const argumentBuffers = new WeakMap<ToolActivity, string>()
 
 /**
  * The mutable streaming surface a chunk projects onto — a structural subset of
@@ -40,7 +48,7 @@ export interface StreamChunkLike {
   id?: string | number
   name?: string
   usage?: { inputTokens: number; outputTokens: number; totalTokens?: number }
-  block?: { type: string; id?: string | number; name?: string }
+  block?: { type: string; id?: string | number; name?: string; arguments?: string }
   /** Rendered fields the union carries but this app ignores. */
   index?: number
   argumentsDelta?: string
@@ -69,12 +77,19 @@ export function projectStreamChunk(surface: StreamingSurface, chunk: StreamChunk
     case 'tool-call-delta': {
       // The name arrives on the first delta of a call and is omitted on the
       // argument deltas that follow, so the call id is what identifies a row.
+      // The argument deltas accumulate into the row's detail as they arrive —
+      // partial JSON still reads as the command typing itself out.
       const id = String(chunk.id)
-      const existing = surface.streamingTools.find((tool) => tool.id === id)
-      if (existing === undefined) {
-        surface.streamingTools.push({ id, name: chunk.name ?? 'tool', status: 'running' })
-      } else if (chunk.name !== undefined && existing.name === 'tool') {
-        existing.name = chunk.name
+      let row = surface.streamingTools.find((tool) => tool.id === id)
+      if (row === undefined) {
+        row = { id, name: chunk.name ?? 'tool', status: 'running' }
+        surface.streamingTools.push(row)
+      }
+      if (chunk.name !== undefined && row.name === 'tool') row.name = chunk.name
+      if (chunk.argumentsDelta !== undefined && chunk.argumentsDelta !== '') {
+        argumentBuffers.set(row, (argumentBuffers.get(row) ?? '') + chunk.argumentsDelta)
+        const detail = describeToolCall(row.name, argumentBuffers.get(row))
+        if (detail !== '') row.detail = detail
       }
       break
     }
@@ -88,18 +103,28 @@ export function projectStreamChunk(surface: StreamingSurface, chunk: StreamChunk
       break
     }
     case 'block-end': {
-      // A settled tool-call block flips its row from running to done and fills
-      // in the name the deltas may have omitted.
+      // A settled tool-call block flips its row from running to done, fills
+      // in the name the deltas may have omitted, and says what the call does:
+      // the block carries the complete raw `arguments`, which summarize into
+      // the row's one-line detail (the command, the path, the query).
       const block = chunk.block
       if (block === undefined || block.type !== 'tool-call') break
       const row =
         surface.streamingTools.find((tool) => tool.id === String(block.id)) ??
         surface.streamingTools.find((tool) => tool.name === block.name)
       if (row === undefined) {
-        surface.streamingTools.push({ id: String(block.id), name: block.name ?? 'tool', status: 'ok' })
+        surface.streamingTools.push({
+          id: String(block.id),
+          name: block.name ?? 'tool',
+          status: 'ok',
+          detail: describeToolCall(block.name ?? 'tool', block.arguments),
+        })
       } else {
         row.name = block.name ?? row.name
         row.status = 'ok'
+        argumentBuffers.delete(row)
+        const detail = describeToolCall(row.name, block.arguments)
+        if (detail !== '') row.detail = detail
       }
       break
     }
