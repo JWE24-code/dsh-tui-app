@@ -1506,9 +1506,14 @@ class TuiApp {
         if (chosen !== undefined) {
           this.composer.setValue(`/${chosen.name} `)
           this.palette.close()
+        } else if (this.composer.value() !== '') {
+          // A draft plus muscle-memory tab must not switch sessions under it;
+          // cycling needs an empty composer, like n/N in a search.
+          this.setStatus('tab cycles sessions on an empty composer')
         } else if (this.tabs.length > 1) {
-          // With no palette open, tab cycles sessions — the one-key form of
-          // alt+n, for moving between conversations without a chord.
+          // With no palette open and nothing typed, tab cycles sessions — the
+          // one-key form of alt+n, for moving between conversations without a
+          // chord.
           this.selectSession((this.active + 1) % this.tabs.length)
         } else {
           this.setStatus('only one session — ctrl+n opens another')
@@ -1614,9 +1619,19 @@ class TuiApp {
         this.scroll(this.pageRows())
         break
       case 'ctrl+u':
-        this.scroll(-Math.max(Math.floor(this.pageRows() / 2), 1))
+        // Clear the line, as every shell does.
+        this.composer.reset()
+        this.history.reset()
         break
       case 'ctrl+d':
+        // Delete forward — the readline pair to backspace.
+        this.composer.deleteForward()
+        this.history.reset()
+        break
+      case 'ctrl+up':
+        this.scroll(-Math.max(Math.floor(this.pageRows() / 2), 1))
+        break
+      case 'ctrl+down':
         this.scroll(Math.max(Math.floor(this.pageRows() / 2), 1))
         break
       case 'shift+up':
