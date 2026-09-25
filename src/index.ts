@@ -17,7 +17,12 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
-import type { Agent, AssistantStreamFrame, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
+import type {
+  Agent,
+  AssistantStreamFrame,
+  ModelSelection,
+  ModelSelectionRef,
+} from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionSeq } from '@deepseek-ai/dsh-session'
@@ -54,7 +59,14 @@ import { activeTheme, applyTheme, listThemes } from './tui/theme.ts'
 import { projectStreamChunk } from './tui/stream.ts'
 import { transcriptMarkdown } from './tui/export.ts'
 import { deleteStoredSessionDir, findStoredSessionDir } from './sessions-store.ts'
-import { loadState, saveStateSync, type PersistedState } from './persist.ts'
+import {
+  loadState,
+  MAX_RESTORED_SESSIONS,
+  restorePlan,
+  saveStateSync,
+  type PersistedSession,
+  type PersistedState,
+} from './persist.ts'
 import { VERSION } from './version.ts'
 import { FleetView, jumpCommand, mergeFleet } from './tui/fleet.ts'
 import { PresencePublisher, type PresenceInput } from './presence.ts'
@@ -81,6 +93,8 @@ export interface Config {
    * Empty means the overview shows only this machine.
    */
   peers?: string[]
+  /** Reopen the sessions that were open at the last exit; on by default. */
+  restore?: boolean
 }
 
 export const Config: z<Config> = z.object({
@@ -91,6 +105,7 @@ export const Config: z<Config> = z.object({
   mouse: z.boolean(),
   bell: z.boolean(),
   peers: z.array(z.string()),
+  restore: z.boolean(),
 })
 
 /** Spinner frames for the streaming indicator. */
@@ -246,7 +261,12 @@ class TuiApp {
   /** The active transcript search, if `/find` has been run and not cleared. */
   private search: { query: string; cursor: number } | undefined
   /** Persisted state as last loaded or saved, and a write debounce. */
-  private persisted: PersistedState = { inputHistory: [], thinking: false }
+  private persisted: PersistedState = {
+    inputHistory: [],
+    thinking: false,
+    sessions: [],
+    activeSession: 0,
+  }
   private persistTimer: NodeJS.Timeout | undefined
 
   /** The cross-device overview, and what this device publishes to it. */
@@ -310,6 +330,8 @@ class TuiApp {
     const cwd = fs === undefined ? process.cwd() : fs.processPath(await fs.resolve('.'))
     this.cwd = cwd
 
+    // An explicit --resume names exactly one session, so it outranks whatever
+    // happened to be open last time: the user has already said what they want.
     if (this.config.resumeSessionId !== undefined) {
       const sessionId = brandString<SessionId>(this.config.resumeSessionId)
       const resumed = await agents.resume({ resumeSessionId: sessionId, agentOptions, setup })
@@ -318,21 +340,22 @@ class TuiApp {
       this.tab.id = String(sessionId)
       this.tab.title = this.config.resumeSessionId
       this.tab.messages = readHistory(this.tab.agent.session)
-    } else {
+      await this.tab.agent.whenIdle()
+    } else if (!(await this.restoreSessions(current))) {
       const sessionId = brandString<SessionId>(`session-${randomUUID()}`)
       const created = await agents.create({ sessionId, meta: { cwd }, agentOptions, setup })
       this.tab.agent = created.agent
       this.adoptForeground(this.tab)
       this.tab.id = String(sessionId)
+      await this.tab.agent.whenIdle()
     }
-    await this.tab.agent.whenIdle()
 
     this.subscribeToStream()
     this.subscribeToAgents()
     // Publishing is what makes this device visible to every other one.
     this.presence.start()
     this.publishPresence()
-    void this.refreshContextLimit()
+    for (const tab of this.tabs) void this.refreshContextLimit(tab)
 
     if (!Screen.isInteractive()) {
       throw new Error(
@@ -342,6 +365,95 @@ class TuiApp {
     this.screen.start()
     this.installSignalHandlers()
     this.paint()
+  }
+
+  /**
+   * Bring back the sessions that were open at the last exit.
+   *
+   * Restoring must never be the reason the app fails to open, so every step
+   * degrades on its own: an id the store no longer holds is dropped before
+   * anything tries to adopt it, an adoption that throws costs only that tab,
+   * and coming back empty-handed returns `false` so the caller falls through
+   * to creating a fresh session. The worst outcome is the behaviour the app
+   * had before any of this existed.
+   *
+   * @param seed - selection a restored tab falls back to when it has no model
+   *   of its own recorded.
+   * @returns whether at least one session came back.
+   */
+  private async restoreSessions(seed: ModelSelection): Promise<boolean> {
+    if (this.config.restore === false) return false
+    if (this.persisted.sessions.length === 0) return false
+
+    // Probe the store first so the plan only ever names sessions that exist.
+    // `/delete` prunes it, and so does anything else that touched $DSH_HOME
+    // between two runs, which makes a dangling id ordinary rather than an
+    // error. Stopping once the cap is met bounds the scan for a state file
+    // that has been hand-edited into something far longer than a tab bar.
+    const present = new Set<string>()
+    for (const session of this.persisted.sessions) {
+      if (present.size >= MAX_RESTORED_SESSIONS) break
+      try {
+        if ((await findStoredSessionDir(session.id)) !== undefined) present.add(session.id)
+      } catch {
+        // An unreadable store is indistinguishable from an absent session.
+      }
+    }
+
+    const plan = restorePlan(this.persisted, (id) => present.has(id))
+    // Track the active tab by id rather than by position, because the entries
+    // that fail to adopt close the gaps up underneath the index.
+    const wanted = plan.sessions[plan.active]?.id
+    const restored: SessionTab[] = []
+    for (const session of plan.sessions) {
+      const tab = await this.adoptSession(session, seed)
+      if (tab !== undefined) restored.push(tab)
+    }
+    if (restored.length === 0) return false
+
+    this.tabs = restored
+    const active = restored.findIndex((tab) => tab.id === wanted)
+    this.active = active === -1 ? 0 : active
+    return true
+  }
+
+  /**
+   * Re-adopt one remembered session as a tab, or give up on it quietly.
+   *
+   * This is {@link TuiApp.openSession} without the screen: the Agent is
+   * resumed against the tab's own selection ref and the transcript is read
+   * straight back out of the session log, because a restored conversation
+   * that came back blank would read as data loss rather than as a resume.
+   */
+  private async adoptSession(
+    session: PersistedSession,
+    seed: ModelSelection,
+  ): Promise<SessionTab | undefined> {
+    const agents = this.ctx.get('agents')
+    if (agents === undefined) return undefined
+
+    const tab = newTab(session.id)
+    tab.title = session.title
+    // The model a conversation was switched to belongs to that conversation
+    // rather than to the profile, so it comes back per tab instead of from the
+    // shared default, which the user may have left pointing somewhere else.
+    const selection = session.model === '' ? seed : { ...seed, model: session.model }
+    tab.selection.current = selection
+    tab.modelName = String(selection.model)
+    try {
+      const resumed = await agents.resume({
+        resumeSessionId: brandString<SessionId>(session.id),
+        agentOptions: { provider: selection.provider, model: selection.model },
+        setup: this.selectionSetupFor(tab),
+      })
+      tab.agent = resumed.agent
+      await tab.agent.whenIdle()
+      tab.messages = readHistory(resumed.agent.session)
+    } catch {
+      // A session the Harness declines to adopt is one we do not bring back.
+      return undefined
+    }
+    return tab
   }
 
   /**
@@ -621,6 +733,8 @@ class TuiApp {
     // Looking at it counts as reading it.
     const tab = this.tabs[index]
     if (tab !== undefined && tab.status === 'ready') tab.status = 'idle'
+    // Which tab you were on is part of what a restart should bring back.
+    this.persistSoon()
     this.picker.hide()
     this.palette.close()
     this.setStatus('')
@@ -639,6 +753,8 @@ class TuiApp {
     if (closed?.streaming === true) this.setStatus('closed a session that was still replying')
     if (this.active >= this.tabs.length) this.active = this.tabs.length - 1
     else if (index < this.active) this.active -= 1
+    // A closed session must not come back on the next launch.
+    this.persistSoon()
     this.screen.invalidate()
     this.paint()
   }
@@ -1247,10 +1363,36 @@ class TuiApp {
       inputHistory: [...this.history.snapshot()],
       thinking: this.showThinking,
       theme: activeTheme(),
+      sessions: this.openSessions(),
+      activeSession: this.activeSessionIndex(),
     }
     // Synchronous on purpose: this runs on the quit path, where an async write
     // would be abandoned the moment `exit(0)` tears the process down.
     saveStateSync(this.persisted)
+  }
+
+  /**
+   * The open sessions in tab order, as a restore wants them back.
+   *
+   * A tab whose Agent has not been adopted yet is left out: its id is the
+   * `pending` placeholder or a session that was never written to the store, so
+   * remembering it would only produce an entry the next launch has to discard.
+   */
+  private openSessions(): PersistedSession[] {
+    return this.tabs
+      .filter((tab) => tab.agent !== undefined)
+      .map((tab) => ({ id: tab.id, model: tab.modelName, title: tab.title }))
+  }
+
+  /**
+   * Where the tab on screen lands in {@link TuiApp.openSessions}, which is not
+   * `this.active` whenever an un-adopted tab sits in front of it.
+   */
+  private activeSessionIndex(): number {
+    const current = this.tabs[this.active]
+    if (current?.agent === undefined) return 0
+    const index = this.openSessions().findIndex((session) => session.id === current.id)
+    return index === -1 ? 0 : index
   }
 
   // ---------------------------------------------------------------- search
@@ -1437,7 +1579,12 @@ class TuiApp {
       this.persistSoon()
     }
     tab.messages.push({ role: 'user', content: text })
-    if (tab.title === '') tab.title = text.slice(0, 60)
+    if (tab.title === '') {
+      tab.title = text.slice(0, 60)
+      // A tab restored with no title reads as "new session" in the bar, which
+      // is exactly the wrong label for a conversation that already has one.
+      this.persistSoon()
+    }
 
     tab.streaming = true
     tab.streamStartedAt = Date.now()
@@ -1714,6 +1861,7 @@ class TuiApp {
       this.adoptForeground(tab)
       this.tabs.push(tab)
       this.active = this.tabs.length - 1
+      this.persistSoon()
       this.overlay = ''
       this.composer.reset()
       this.setStatus(this.tabs.length > 1 ? `session ${String(this.tabs.length)}` : 'new session')
@@ -1835,6 +1983,8 @@ class TuiApp {
     }
     tab.selection.current = next
     tab.modelName = row.model
+    // A restored tab should answer on the model its conversation was moved to.
+    this.persistSoon()
     void this.refreshContextLimit(tab)
     // Token counts belong to the previous route's accounting.
     tab.haveUsage = false
@@ -1990,9 +2140,16 @@ class TuiApp {
       this.tab.agent = resumed.agent
       this.adoptForeground(this.tab)
       await this.tab.agent.whenIdle()
+      // The tab now *is* that session. Leaving the old id behind made presence
+      // publish the wrong one to the fleet and let `/delete` offer the session
+      // this very tab had open, and a restore would have remembered the id of
+      // a conversation nobody was looking at.
+      this.tab.id = id
       this.tab.title = title
       this.refreshFromSession()
       this.tab.scrollBack = 0
+      // This tab now points at a different session than the one remembered.
+      this.persistSoon()
       this.setStatus('')
     } catch (error) {
       this.setStatus(describeError(error), true)

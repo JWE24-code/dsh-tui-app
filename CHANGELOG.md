@@ -15,6 +15,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `NO_COLOR` still turns color off entirely. `mono` is greyscale and high
   contrast for anyone the hue-based palettes fail. The choice is saved to
   `$DSH_HOME/tui-state.json` and restored before the first frame.
+- **Session caching** — the sessions you had open come back after a restart,
+  with their transcripts, their per-tab models, and the tab you were looking
+  at. Only the ids are stored (in `$DSH_HOME/tui-state.json`, bumped to
+  version 2); every transcript is re-read from the Harness's own session
+  store, so nothing is duplicated and nothing goes stale. An id the store no
+  longer holds is skipped silently — `/delete` and anything else touching
+  `$DSH_HOME` can prune it between runs — and a restore that brings back
+  nothing falls through to a fresh session, so the app always starts usable.
+  `--resume <id>` still wins, and `--no-restore` opts out.
 
 - **Fleet overview** — `ctrl+f` or `/fleet` lists every dsh session across every
   device in one place, grouped by machine and ranked by urgency, with a live
@@ -83,6 +92,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   throws away the whole session.
 
 ### Fixed
+
+- **`/resume` now moves the tab's session id.** Adopting an earlier session
+  swapped the Agent but left the tab claiming the id it had before, so the
+  fleet overview published the wrong session for that tab and `/delete`
+  offered the very conversation it had open.
 
 - **Model choice is per session.** Every Agent used to share one selection
   ref, so `/model` in one conversation silently rerouted all the others. Each

@@ -6,6 +6,10 @@
  * write goes to a mkdtemp temp directory via the `DSH_HOME` env override,
  * and the directory is removed at the end however the run turns out.
  *
+ * `decodeState` and `restorePlan` are pure, so the cases that matter most —
+ * a file from another version, a half-written one, an id the session store no
+ * longer holds — are exercised directly rather than through a terminal.
+ *
  * Run with: node --experimental-strip-types tests/persist.ts
  */
 
@@ -15,7 +19,29 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 
-import { loadState, saveState, statePath } from '../src/persist.ts'
+import {
+  decodeState,
+  loadState,
+  MAX_RESTORED_SESSIONS,
+  restorePlan,
+  saveState,
+  statePath,
+  type PersistedSession,
+  type PersistedState,
+} from '../src/persist.ts'
+
+/** The current on-disk version, as the writer stamps it. */
+const VERSION = 2
+
+/** A state with only the fields a case cares about spelled out. */
+function state(partial: Partial<PersistedState> = {}): PersistedState {
+  return { inputHistory: [], thinking: false, sessions: [], activeSession: 0, ...partial }
+}
+
+/** A remembered session, defaulting the fields a case is not about. */
+function session(id: string, model = 'model-a', title = ''): PersistedSession {
+  return { id, model, title }
+}
 
 let checks = 0
 function check(label: string, condition: boolean): void {
@@ -46,12 +72,28 @@ try {
 
   // -------------------------------------------------------- round trip
 
-  await saveState({ inputHistory: ['first prompt', 'second prompt'], thinking: true }, env)
+  await saveState(state({ inputHistory: ['first prompt', 'second prompt'], thinking: true }), env)
   const restored = await loadState(env)
   check('save/load round-trips the history', restored.inputHistory.join(',') === 'first prompt,second prompt')
   check('save/load round-trips the thinking flag', restored.thinking === true)
   const dirEntries = await readdir(sandbox)
   check('the atomic write leaves no temp file behind', !dirEntries.some((name) => name.endsWith('.tmp')))
+
+  // ------------------------------------------ round trip: open sessions
+
+  await saveState(
+    state({
+      sessions: [session('session-a', 'model-a', 'first'), session('session-b', 'model-b', 'second')],
+      activeSession: 1,
+    }),
+    env,
+  )
+  const tabs = await loadState(env)
+  check('save/load round-trips the session ids', tabs.sessions.map((s) => s.id).join(',') === 'session-a,session-b')
+  check('save/load round-trips each session model', tabs.sessions.map((s) => s.model).join(',') === 'model-a,model-b')
+  check('save/load round-trips each session title', tabs.sessions.map((s) => s.title).join(',') === 'first,second')
+  check('save/load round-trips the active tab', tabs.activeSession === 1)
+  check('the fallback carries no sessions', (await loadState({ DSH_HOME: join(sandbox, 'nothing') })).sessions.length === 0)
 
   // ------------------------------------------------- unreadable states
 
@@ -59,27 +101,117 @@ try {
   await writeFile(statePath(env), JSON.stringify({ version: 99, inputHistory: ['x'], thinking: true }), 'utf8')
   const future = await loadState(env)
   check('a future version is ignored', future.inputHistory.length === 0 && future.thinking === false)
+  // The shape before sessions existed. It shares field names with the current
+  // one, which is exactly why it must be discarded rather than half-adopted.
+  await writeFile(
+    statePath(env),
+    JSON.stringify({ version: 1, inputHistory: ['old'], thinking: true, sessions: [{ id: 'session-a' }] }),
+    'utf8',
+  )
+  const previous = await loadState(env)
+  check(
+    'the previous version degrades to the fallback',
+    previous.inputHistory.length === 0 && previous.thinking === false && previous.sessions.length === 0,
+  )
   await writeFile(statePath(env), '{not json at all', 'utf8')
   const corrupt = await loadState(env)
   check('corrupt json falls back', corrupt.inputHistory.length === 0 && corrupt.thinking === false)
   await writeFile(
     statePath(env),
-    JSON.stringify({ version: 1, inputHistory: ['keep', 7, null, 'also keep'], thinking: undefined }),
+    JSON.stringify({ version: VERSION, inputHistory: ['keep', 7, null, 'also keep'], thinking: undefined }),
     'utf8',
   )
   const cleaned = await loadState(env)
   check('non-string entries are dropped on load', cleaned.inputHistory.join(',') === 'keep,also keep')
   check('a missing thinking flag reads as false', cleaned.thinking === false)
-  await writeFile(statePath(env), JSON.stringify({ version: 1, thinking: true }), 'utf8')
+  check('a missing sessions array reads as empty', cleaned.sessions.length === 0)
+  await writeFile(statePath(env), JSON.stringify({ version: VERSION, thinking: true }), 'utf8')
   const noHistory = await loadState(env)
   check('a missing inputHistory reads as empty', noHistory.inputHistory.length === 0 && noHistory.thinking === true)
+
+  // -------------------------------------------- partial session entries
+
+  // Exactly what a truncated or hand-edited file looks like: some entries are
+  // whole, some are junk, and none of it may throw on the way to a usable app.
+  await writeFile(
+    statePath(env),
+    JSON.stringify({
+      version: VERSION,
+      sessions: [
+        { id: 'session-a', model: 'model-a', title: 'kept' },
+        { id: '', model: 'model-b' },
+        { model: 'model-c', title: 'no id' },
+        null,
+        'session-d',
+        42,
+        { id: 'session-e', model: 7, title: null },
+      ],
+      activeSession: 4,
+    }),
+    'utf8',
+  )
+  const partial = await loadState(env)
+  check('entries without a usable id are dropped', partial.sessions.map((s) => s.id).join(',') === 'session-a,session-e')
+  check('a non-string model reads as empty', partial.sessions[1]?.model === '')
+  check('a non-string title reads as empty', partial.sessions[1]?.title === '')
+  check('an out-of-range active index reads as zero', partial.activeSession === 0)
+
+  // decodeState is the same code path without the filesystem, so the shapes a
+  // file cannot easily hold get checked directly.
+  check('decode survives a bare array', decodeState('[]').sessions.length === 0)
+  check('decode survives a JSON null', decodeState('null').sessions.length === 0)
+  check('decode survives an empty string', decodeState('').activeSession === 0)
+  check(
+    'decode rejects a fractional active index',
+    decodeState(JSON.stringify({ version: VERSION, sessions: [session('a')], activeSession: 0.5 })).activeSession === 0,
+  )
+  check(
+    'decode rejects a negative active index',
+    decodeState(JSON.stringify({ version: VERSION, sessions: [session('a')], activeSession: -1 })).activeSession === 0,
+  )
+
+  // ------------------------------------------------------- restore plan
+
+  const three = state({
+    sessions: [session('a'), session('b'), session('c')],
+    activeSession: 2,
+  })
+  const all = restorePlan(three, () => true)
+  check('every available session is planned', all.sessions.map((s) => s.id).join(',') === 'a,b,c')
+  check('the active tab survives a full restore', all.active === 2)
+
+  // The store can be pruned between runs, so a missing id is routine.
+  const pruned = restorePlan(three, (id) => id !== 'b')
+  check('an unknown session id is skipped', pruned.sessions.map((s) => s.id).join(',') === 'a,c')
+  check('the active index follows its session, not its old position', pruned.active === 1)
+
+  const lostActive = restorePlan(three, (id) => id !== 'c')
+  check('a vanished active tab falls back to the first', lostActive.active === 0)
+  check('the surviving tabs are still planned', lostActive.sessions.map((s) => s.id).join(',') === 'a,b')
+
+  const none = restorePlan(three, () => false)
+  check('nothing available plans nothing', none.sessions.length === 0 && none.active === 0)
+  check('an empty state plans nothing', restorePlan(state(), () => true).sessions.length === 0)
+
+  // A duplicated id would otherwise adopt the same conversation twice.
+  const duplicated = state({ sessions: [session('a'), session('a'), session('b')], activeSession: 1 })
+  check('a duplicated id is planned once', restorePlan(duplicated, () => true).sessions.length === 2)
+
+  const many = state({
+    sessions: Array.from({ length: MAX_RESTORED_SESSIONS + 5 }, (_, index) => session(`s${String(index)}`)),
+    activeSession: MAX_RESTORED_SESSIONS + 2,
+  })
+  const capped = restorePlan(many, () => true)
+  check('the plan is capped', capped.sessions.length === MAX_RESTORED_SESSIONS)
+  check('an active tab beyond the cap falls back to the first', capped.active === 0)
 
   // ------------------------------------- save creates its own directory
 
   const nested = { DSH_HOME: join(sandbox, 'does', 'not', 'exist') }
-  await saveState({ inputHistory: ['nested'], thinking: false }, nested)
+  await saveState(state({ inputHistory: ['nested'], sessions: [session('session-n')] }), nested)
   const nestedRestored = await loadState(nested)
   check('saveState creates a missing DSH_HOME', nestedRestored.inputHistory.join(',') === 'nested')
+  check('the nested write kept the sessions', nestedRestored.sessions[0]?.id === 'session-n')
 } finally {
   await rm(sandbox, { recursive: true, force: true })
 }

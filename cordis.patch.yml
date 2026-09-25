@@ -30,6 +30,7 @@
         mouse: !!js ctx.tuiStartup.mouse
         bell: !!js ctx.tuiStartup.bell
         peers: !!js ctx.tuiStartup.peers
+        restore: !!js ctx.tuiStartup.restore
 
 # The terminal owns the screen; a hot reload repainting underneath it would
 # corrupt the alternate buffer.

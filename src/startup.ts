@@ -35,6 +35,8 @@ export interface TuiStartupValues {
   mouse: boolean
   /** Ring the bell when a session's turn finishes; on by default. */
   bell: boolean
+  /** Bring back the sessions that were open at the last exit; on by default. */
+  restore: boolean
   /** Devices to include in the fleet overview; empty means this one only. */
   peers: string[]
 }
@@ -52,6 +54,7 @@ function tuiCommand(): Command {
     .option('--context-limit <tokens>', "context budget override; default is the model's own capacity")
     .option('--mouse', 'report mouse events so the wheel scrolls (disables terminal text selection)')
     .option('--no-bell', 'stay silent when a session finishes instead of ringing the terminal bell')
+    .option('--no-restore', 'start with one empty session instead of reopening the last ones')
     .option(
       '--peer <host>',
       'device to include in the fleet overview; repeatable, anything ssh accepts',
@@ -66,6 +69,7 @@ Examples:
   dsh --profile tui --resume session-...  reopen an existing session
   dsh --profile tui --thinking            show the reasoner's chain of thought
   dsh --profile tui --peer laptop         include another device in ctrl+f
+  dsh --profile tui --no-restore          start clean instead of reopening tabs
 
 Inside the app, type / for the command palette; press ctrl+c for the sessions
 menu and ctrl+c again within 1.5s to quit.
@@ -87,6 +91,7 @@ export function apply(ctx: Context): void {
       contextLimit?: string
       mouse?: boolean
       bell?: boolean
+      restore?: boolean
       peer?: string[]
     }>()
 
@@ -118,6 +123,7 @@ export function apply(ctx: Context): void {
       mouse: options.mouse === true,
       // commander maps --no-bell to bell: false and leaves it true otherwise.
       bell: options.bell !== false,
+      restore: options.restore !== false,
       peers: options.peer ?? [],
     } satisfies TuiStartupValues)
   })

@@ -91,6 +91,7 @@ npm run typecheck
 | `--mouse` | Report mouse events so the wheel scrolls (costs terminal text selection) |
 | `--no-bell` | Stay silent when a session finishes |
 | `--peer <host>` | Device to include in the fleet overview; repeatable |
+| `--no-restore` | Start with one empty session instead of reopening the last ones |
 | `--version` | Print the app version and exit |
 
 `DSH_TUI_CONTEXT_LIMIT` sets the same budget; `DSH_TUI_THEME=light\|dark`
@@ -178,6 +179,22 @@ the next launch. The model choice is saved through the Harness's own
 `saveSelection`, not this file. Writing is atomic and best-effort: a read-only
 home means the app runs exactly as before, just without recall across
 restarts.
+Sent prompts, the thinking preference, and the sessions you had open are saved
+to `$DSH_HOME/tui-state.json` (`$DSH_HOME` defaults to `~/.dsh`) and restored
+on the next launch. The profile-wide model default is saved through the
+Harness's own `saveSelection`, not this file; the per-session model a `/model`
+switch chose is part of the tab and comes back with it.
+
+Reopening is deliberately timid. Only the session ids are remembered — every
+transcript is re-read from the Harness's own session store — and an id that
+store no longer holds is skipped without a word, because `/delete` and
+anything else that touches `$DSH_HOME` can prune it between two runs. If
+nothing at all comes back you get a fresh session, exactly as before. Pass
+`--no-restore` to always start clean, and `--resume <id>` to name one session,
+which wins over both.
+
+Writing is atomic and best-effort: a read-only home means the app runs exactly
+as before, just without recall across restarts.
 
 ## One list of every device
 
@@ -366,7 +383,7 @@ that the service is missing.
 src/
   index.ts         the app plugin: Harness wiring, key dispatch, commands
   startup.ts       the cmdline provider (--resume/--model/--thinking/...)
-  persist.ts       durable composer history and preferences under $DSH_HOME
+  persist.ts       durable history, preferences, and open sessions under $DSH_HOME
   sessions-store.ts  session storage paths and deletion under $DSH_HOME
   version.ts       reads the package version for --version and /about
   tui/
@@ -389,6 +406,7 @@ it can be tested without a profile.
 
 ```sh
 npm test        # render, queue, persist, stream, export, sessions, fleet, theme, patch, pty
+npm test        # render + queue + persist + stream + pty (370 + 8 + 41 + 20 + 13)
 npm run test:pty   # just the pty round trip, for a quick loop (needs script(1))
 node --experimental-strip-types tests/preview.ts [normal|palette|picker|stream|think]
 ```
