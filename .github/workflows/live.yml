@@ -1,0 +1,38 @@
+name: Live round trip
+
+# The one test that needs a provider: it boots the real TUI under a pty and
+# waits for a real model answer. Manual on purpose — it spends tokens, and a
+# pull request from a fork cannot be given a secret.
+on:
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: Prompt to send through the TUI
+        required: false
+        default: 'reply with exactly: READY'
+      expect:
+        description: Text that must appear in a painted frame
+        required: false
+        default: READY
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm install -g @deepseek-ai/dsh
+      - run: npm ci
+      - run: npm run link-types
+      - run: npm run build
+      - run: node scripts/install-profile.mjs tui
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      - run: npm run test:live
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          DSH_TUI_LIVE_PROMPT: ${{ inputs.prompt }}
+          DSH_TUI_LIVE_EXPECT: ${{ inputs.expect }}

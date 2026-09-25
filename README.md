@@ -656,14 +656,15 @@ regression still would.
   trip through the real screen, decoder, and frame renderer), streaming
   projection, queueing, steering, persistence, session storage, cross-session
   search, the panels, the plugin seam, i18n, the fleet, and the render cache.
-- **The reply projection is round-trip tested, the boot path is not
-  automated.** A real agent streaming through `agent/assistant-stream` is
-  proven by types, unit rendering, and the synthetic stream replay; the full
-  boot-to-model turn is still driven by a person. The terminal layer's own
-  integration test drives the real `Screen`, key decoder, and renderer under
-  `script(1)` through the `@` menu, an approval panel, a questionnaire, and a
-  language switch — which is how a space that never matched the panel's toggle
-  was caught.
+- **The boot-to-model turn is now automated, on demand.** `npm run test:live`
+  (`DSH_TUI_LIVE=1`) boots `dsh --profile tui` under `script(1)`, types a
+  prompt, and asserts that the model's answer reaches a painted frame before
+  quitting with the two-step ctrl+c. It needs credentials and costs a model
+  call, so it is deliberately not part of `npm test`; a manual GitHub workflow
+  runs it when a key is configured. The offline pty suite additionally drives
+  the real `Screen`, key decoder, and renderer through the `@` menu, an
+  approval panel, a questionnaire, and a language switch — which is how a
+  space that never matched the panel's toggle was caught.
 - **`ctx.sessionQuery` listing is probed.** The service is documented as
   offering "filtered lists" without a stable method name, so `/resume` and
   `/tree` try `listSessions`, `list`, then `querySessions` and report cleanly

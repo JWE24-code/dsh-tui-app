@@ -52,7 +52,8 @@
     "preview": "node --experimental-strip-types tests/preview.ts",
     "test:pty": "node --experimental-strip-types tests/pty.ts",
     "setup-voice": "node scripts/install-voice.mjs",
-    "bench": "node --experimental-strip-types scripts/bench-render.ts"
+    "bench": "node --experimental-strip-types scripts/bench-render.ts",
+    "test:live": "DSH_TUI_LIVE=1 node --experimental-strip-types tests/live-pty.ts"
   },
   "dependencies": {
     "commander": "^15.0.0"
