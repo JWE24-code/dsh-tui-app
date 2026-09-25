@@ -643,30 +643,35 @@ regression still would.
 
 ## Status and caveats
 
-- **Verified against real `dsh` installs** (0.1.5-rc.3 and 0.1.7-rc.2; CI typechecks both `latest` and `next`):
-  - `npm run link-types && npm run typecheck` passes clean against the
-    `@deepseek-ai` packages inside the installed runtime.
+- **Verified against real `dsh` installs** (0.1.5-rc.3 and 0.1.7-rc.2; CI
+  typechecks `latest` and `next`):
+  - `npm run link-types && npm run typecheck` passes clean against both lines.
   - `dsh --profile tui --dump-config` composes the tree, showing `dsh-base`
-    patched by this bundle and both `tui-startup` and `tui-app` mounted with
-    their injections.
+    patched by this bundle and both `tui-startup` and `tui-app` mounted.
   - `dsh --profile tui --help` prints this app's own flags, so the startup
     provider parses the real command line.
-  - `dsh --profile tui </dev/null` boots the bundle, creates the agent, reaches
-    `whenIdle()`, and exits on the non-TTY guard.
-- **The terminal layer is round-trip tested; the reply projection is too.** The
-  pty harness drives real keystrokes through the actual `Screen`, decoder, and
-  renderer, and `tests/stream-smoke.ts` replays the chunk→transcript switch
-  (`src/tui/stream.ts`) against a synthetic reply. What remains driven only by
-  a human is the full boot-to-model round trip — a real agent streaming through
-  the Harness's `agent/assistant-stream` events — proven by types and unit
-  rendering, not end-to-end automation.
+  - `dsh --profile tui </dev/null` boots the bundle and exits on the non-TTY
+    guard.
+- **25 suites, 1359 assertions**, covering rendering (including a pty round
+  trip through the real screen, decoder, and frame renderer), streaming
+  projection, queueing, steering, persistence, session storage, cross-session
+  search, the panels, the plugin seam, i18n, the fleet, and the render cache.
+- **The reply projection is round-trip tested, the boot path is not
+  automated.** A real agent streaming through `agent/assistant-stream` is
+  proven by types, unit rendering, and the synthetic stream replay; the full
+  boot-to-model turn is still driven by a person.
 - **`ctx.sessionQuery` listing is probed.** The service is documented as
-  offering "filtered lists" without a stable method name in the docs read here,
-  so `/resume` tries `listSessions`, `list`, then `querySessions` and reports
-  cleanly if none exist.
+  offering "filtered lists" without a stable method name, so `/resume` and
+  `/tree` try `listSessions`, `list`, then `querySessions` and report cleanly
+  when none exist.
 - **Interrupt is best-effort.** `esc` aborts the app's wait and calls
   `interrupt()`/`abort()` on the agent if either exists; whatever streamed is
-  still committed to the transcript.
+  still committed.
+- **`/mcp` reads, it does not manage.** The MCP client is configured by
+  composition, so the pane reports the bridge-prefixed tools that are actually
+  mounted and where to declare a server — there is no runtime add/remove.
+- **Two release steps remain manual**: publishing to npm (needs the account's
+  credentials) and listing on dshfind.
 
 ## License
 
