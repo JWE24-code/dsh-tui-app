@@ -902,7 +902,7 @@ export const HELP_TEXT = [
   '',
   '- `ctrl+n` — open another session · `alt+1`…`alt+9` — jump to one',
   '- `alt+n` / `alt+p` / `tab` — cycle · `/sessions` — pick, or start one',
-  '- `/close` — close this one · a finished session rings the bell and marks ●',
+  '- `/close` — close · `/rename <title>` — name it · done rings the bell ●',
   '- `ctrl+a` / `ctrl+e` — start / end of line · `ctrl+w` — delete word',
   '- `ctrl+c` — sessions menu · again within 1.5s — quit',
   '',

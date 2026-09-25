@@ -7,6 +7,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Session renaming** — `/rename <title>` pins a name onto the active
+  session in the Harness's own durable log (a `session/title` event with the
+  `user` source), so the tab bar, the resume picker, and any other dsh client
+  of the same session all agree. `/rename` with no argument regenerates the
+  automatic title — the documented unpin. Text folds to one line and is capped
+  at the tab-label budget, the tab and the restore cache update immediately,
+  and a profile without the title service says so instead of failing.
 - **Plugin management** — `/plugins` lists the packages the active profile
   composes: enabled ones first in composition order and marked with a dot,
   disabled dependencies underneath. `enter` moves a package in or out of

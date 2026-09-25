@@ -61,6 +61,7 @@ import { activeTheme, applyTheme, listThemes } from './tui/theme.ts'
 import { projectStreamChunk } from './tui/stream.ts'
 import { transcriptMarkdown } from './tui/export.ts'
 import { deleteStoredSessionDir, findStoredSessionDir } from './sessions-store.ts'
+import { planRename, snapshotTitle } from './rename.ts'
 import {
   activeProfileName,
   forgetPlugin,
@@ -162,6 +163,11 @@ const BUILTIN_COMMANDS: readonly PaletteCommand[] = [
   { name: 'close', args: '', description: 'Close this session' },
   { name: 'resume', args: '', description: 'Pick up an earlier session' },
   { name: 'delete', args: '', description: 'Delete a stored session for good' },
+  {
+    name: 'rename',
+    args: '[title]',
+    description: 'Name this session; no argument regenerates the automatic title',
+  },
   { name: 'model', args: '[name]', description: 'Switch model; no argument lists them' },
   { name: 'theme', args: '[name]', description: 'Switch the color palette; no argument lists them' },
   {
@@ -1898,6 +1904,55 @@ class TuiApp {
     }
   }
 
+  /**
+   * Name the active session (`/rename <title>`), or with no argument ask the
+   * title service to regenerate the automatic one. A rename pins the title in
+   * the session's own durable log — a `session/title` event with the `user`
+   * source — so every surface that reads titles agrees: this tab, the resume
+   * picker, and any other dsh client of the same session. The tab label and
+   * the restore cache follow immediately.
+   */
+  private async renameSession(rawInput: string): Promise<void> {
+    const plan = planRename(rawInput)
+    const tab = this.tab
+    const agent = tab.agent
+    if (agent === undefined) {
+      this.setStatus('this session has no agent yet', true)
+      this.paint()
+      return
+    }
+    const titles = this.ctx.get('sessionTitle') as SessionTitleLike | undefined
+    if (titles?.rename === undefined || titles.refresh === undefined) {
+      this.setStatus('this profile has no session title service', true)
+      this.paint()
+      return
+    }
+    try {
+      if (plan.kind === 'pin') {
+        const snapshot = titles.rename(agent.session, plan.title)
+        // The service normalized the text; the tab label keeps the same
+        // 60-character budget as the automatic first-prompt title.
+        const title = (snapshotTitle(snapshot) ?? plan.title).slice(0, 60)
+        tab.title = title
+        this.persistSoon()
+        this.setStatus(`renamed → ${title}`)
+      } else {
+        const snapshot = await titles.refresh(agent.session)
+        const title = snapshotTitle(snapshot)
+        if (title === undefined) {
+          this.setStatus('no automatic title yet — send something first')
+        } else {
+          tab.title = title.slice(0, 60)
+          this.persistSoon()
+          this.setStatus(`title → ${tab.title}`)
+        }
+      }
+    } catch (error) {
+      this.setStatus(describeError(error), true)
+    }
+    this.paint()
+  }
+
   /** Run a slash command: this app's own first, then the Harness registry. */
   private async runCommand(name: string, rawInput: string): Promise<void> {
     this.tab.scrollBack = 0
@@ -1912,6 +1967,10 @@ class TuiApp {
 
       case 'delete':
         await this.showSessions('delete')
+        return
+
+      case 'rename':
+        await this.renameSession(rawInput)
         return
 
       case 'sessions':
@@ -2552,6 +2611,12 @@ class TuiApp {
 }
 
 // ----------------------------------------------------------------- utilities
+
+/** The subset of `ctx.sessionTitle` that `/rename` uses, probed defensively. */
+interface SessionTitleLike {
+  rename?: (session: Session, title: string) => unknown
+  refresh?: (session: Session, signal?: AbortSignal) => Promise<unknown> | unknown
+}
 
 /** The subset of `ctx.sessionQuery` the picker uses, probed defensively. */
 interface SessionQueryLike {

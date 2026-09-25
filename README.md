@@ -356,7 +356,7 @@ alongside the app's own:
 | Command | Owner |
 |---|---|
 | `/compact`, and any other plugin command | `ctx.commands` (the Harness registry) |
-| `/new`, `/sessions`, `/close`, `/resume`, `/delete`, `/model`, `/theme`, `/thinking`, `/tools`, `/export`, `/find`, `/unqueue`, `/copy`, `/about`, `/help`, `/exit` (`/quit`) | this app |
+| `/new`, `/sessions`, `/close`, `/resume`, `/delete`, `/rename`, `/model`, `/theme`, `/thinking`, `/tools`, `/export`, `/find`, `/unqueue`, `/copy`, `/about`, `/help`, `/exit` (`/quit`) | this app |
 
 Unknown commands are dispatched to `ctx.commands.execute()` and only reported
 as unknown if the registry also rejects them.

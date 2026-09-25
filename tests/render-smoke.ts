@@ -377,6 +377,7 @@ check(
   HELP_TEXT.includes('alt+1'),
 )
 check('help documents the fleet keys', HELP_TEXT.includes('ctrl+f'))
+check('help documents /rename', HELP_TEXT.includes('/rename'))
 check(
   'help scrolled to the bottom ends on the commands section',
   render({ ...helpTop, scrollBack: 0 }).lines.some((line) =>
