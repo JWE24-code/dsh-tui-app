@@ -309,7 +309,13 @@ it is running.
 
 `enter` opens the session when this app already owns it. It cannot open
 anything else — another process has no terminal here — so instead it copies the
-command that does reach it:
+command that does reach it. `p` goes one better for reading: it fetches the
+peer's session log over the same SSH channel and shows the last turns as a
+read-only preview, decoded here. Nothing on the peer is written, nothing new
+listens, and the path is built with the store's own segment encoder, so a
+hostile presence record cannot reach outside its own session directory.
+
+The copied command is:
 
 ```sh
 ssh -t laptop 'dsh --profile tui --resume session-…'

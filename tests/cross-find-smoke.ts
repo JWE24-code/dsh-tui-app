@@ -8,7 +8,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { zstdCompressSync } from 'node:zlib'
 import { projectKey, encodeSegment } from '../src/sessions-store.ts'
-import { searchSessions, zstdAvailable } from '../src/cross-find.ts'
+import {
+  decodeLogBytes,
+  isZstdFrame,
+  parseLogMessages,
+  searchSessions,
+  zstdAvailable,
+} from '../src/cross-find.ts'
 
 let checks = 0
 function check(label: string, condition: boolean): void {
@@ -73,6 +79,32 @@ check('the hit cap is respected', limited.hits.length === 1)
 const bySession = searchSessions(root, 'tail')
 check('a rarer word still matches', bySession.hits.length === 2)
 check('the matched text is present in the snippet', bySession.hits.every((hit) => hit.line.includes('tail')))
+
+// ------------------------------------------------- parsing and decoding
+
+const parsed = parseLogMessages(
+  [
+    record('turn/start', 'ignored'),
+    record('user/message', 'hello there'),
+    record('assistant/message', 'hi back'),
+    'not json',
+    record('tool/result', 'ignored too'),
+  ].join('\n'),
+)
+check('only message records parse', parsed.length === 2)
+check('roles are attributed', parsed[0]?.role === 'user' && parsed[1]?.role === 'assistant')
+check('text is preserved', parsed[0]?.text === 'hello there')
+check('an empty body parses to nothing', parseLogMessages('').length === 0)
+
+const plainBytes = new TextEncoder().encode(record('user/message', 'plain log'))
+check('a plain log is not zstd', !isZstdFrame(plainBytes))
+check('a plain log decodes as-is', decodeLogBytes(plainBytes)?.includes('plain log') === true)
+const framed = new Uint8Array(zstdCompressSync(Buffer.from(record('user/message', 'compressed log'), 'utf8')))
+check('a compressed log is recognised by its magic', isZstdFrame(framed))
+if (zstdAvailable()) {
+  check('a compressed log decodes', decodeLogBytes(framed)?.includes('compressed log') === true)
+}
+check('garbage bytes do not decode to text', decodeLogBytes(new Uint8Array([])) === '')
 
 rmSync(root, { recursive: true, force: true })
 

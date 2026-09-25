@@ -74,6 +74,46 @@ function textOfRecord(raw: string): { text: string; role?: 'user' | 'assistant' 
   return { text, ...(role === undefined ? {} : { role }) }
 }
 
+/** One readable message from a stored session log. */
+export interface LogMessage {
+  role: 'user' | 'assistant'
+  text: string
+}
+
+/**
+ * Parse a whole JSONL session body into its visible messages.
+ *
+ * Shared by cross-session search and the fleet preview, so both read a log the
+ * same way — including a foreign device's log, which may be an older format
+ * whose unknown records are simply skipped.
+ */
+export function parseLogMessages(body: string): LogMessage[] {
+  const messages: LogMessage[] = []
+  for (const raw of body.split('\n')) {
+    if (!raw.includes('"')) continue
+    const { text, role } = textOfRecord(raw)
+    if (text === '' || role === undefined) continue
+    messages.push({ role, text })
+  }
+  return messages
+}
+
+/** Whether a buffer carries the zstd frame magic. */
+export function isZstdFrame(bytes: Uint8Array): boolean {
+  return bytes.length >= 4 && bytes[0] === 0x28 && bytes[1] === 0xb5 && bytes[2] === 0x2f && bytes[3] === 0xfd
+}
+
+/** Decode raw log bytes, whichever form they arrived in. */
+export function decodeLogBytes(bytes: Uint8Array): string | undefined {
+  if (!isZstdFrame(bytes)) return Buffer.from(bytes).toString('utf8')
+  if (!zstdAvailable()) return undefined
+  try {
+    return zstdDecompressSync(bytes).toString('utf8')
+  } catch {
+    return undefined
+  }
+}
+
 /** Read one log file, decompressing when it is zstd, bounded by `maxBytes`. */
 function readLog(path: string, maxBytes: number): string | undefined {
   try {

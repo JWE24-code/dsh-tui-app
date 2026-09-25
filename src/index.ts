@@ -67,8 +67,8 @@ import { forkCut, lineage, projectUserTurns, rewindTarget } from './rewind.ts'
 import { renderJobs, type JobLike } from './tui/jobs.ts'
 import { groupMcpTools, renderMcp } from './tui/mcp.ts'
 import { LANGS, currentLanguage, isLang, setLanguage, type Lang } from './tui/i18n.ts'
-import { searchSessions, type SessionHit } from './cross-find.ts'
-import { sessionsRoot } from './sessions-store.ts'
+import { decodeLogBytes, parseLogMessages, searchSessions, type SessionHit } from './cross-find.ts'
+import { encodeSegment, projectKey, sessionsRoot } from './sessions-store.ts'
 import { ApprovalPanel, QuestionsPanel, type ApprovalDecision } from './tui/panels.ts'
 import { UserQuestionError } from '@deepseek-ai/dsh-user-questions'
 import type { AskUserQuestionAnswer, AskUserQuestionRequest } from '@deepseek-ai/dsh-user-questions'
@@ -1604,9 +1604,96 @@ class TuiApp {
         this.openFleetSelection()
         break
 
+      case 'p':
+        void this.previewFleetSelection()
+        break
+
       default:
         break
     }
+  }
+
+  /**
+   * Preview a peer session's transcript, read over the SSH channel that
+   * already exists.
+   *
+   * The log is fetched read-only and decoded locally, so nothing on the peer
+   * is written, nothing new listens, and a peer on an older format simply
+   * shows the messages both formats share. The paths are built with the same
+   * segment encoder the store uses, which is what makes a hostile presence
+   * record unable to escape its own session directory.
+   */
+  private async previewFleetSelection(): Promise<void> {
+    const row = this.fleet.current()
+    if (row === undefined) return
+    if (row.local) {
+      this.setStatus('this is this device — the session is on screen here')
+      this.paint()
+      return
+    }
+    const sessionId = row.sessionId
+    if (sessionId === '') {
+      this.setStatus('that row carries no session id to read')
+      this.paint()
+      return
+    }
+    const cwd = row.cwd ?? ''
+    const relative = join(
+      'sessions',
+      cwd === '' ? '--' : projectKey(cwd),
+      encodeSegment(sessionId),
+    )
+    const remote =
+      `sh -lc 'd="\${DSH_HOME:-$HOME/.dsh}"; cat "$d"/` +
+      `${relative}/session.v*.jsonl* 2>/dev/null'`
+    this.setStatus(`reading ${sessionId} from ${row.host}…`)
+    this.paint()
+    const raw = await new Promise<Buffer | undefined>((resolve) => {
+      const child = spawn('ssh', ['-o', 'BatchMode=yes', row.host, remote], {
+        stdio: ['ignore', 'pipe', 'ignore'],
+      })
+      const chunks: Buffer[] = []
+      const timer = setTimeout(() => {
+        child.kill()
+        resolve(undefined)
+      }, 15_000)
+      child.stdout?.on('data', (chunk: Buffer) => chunks.push(chunk))
+      child.on('error', () => {
+        clearTimeout(timer)
+        resolve(undefined)
+      })
+      child.on('exit', () => {
+        clearTimeout(timer)
+        resolve(Buffer.concat(chunks))
+      })
+    })
+    if (raw === undefined || raw.byteLength === 0) {
+      this.setStatus(`nothing readable came back from ${row.host}`, true)
+      this.paint()
+      return
+    }
+    const decoded = decodeLogBytes(new Uint8Array(raw))
+    if (decoded === undefined) {
+      this.setStatus('that log is compressed and this Node cannot decode it', true)
+      this.paint()
+      return
+    }
+    const messages = parseLogMessages(decoded)
+    if (messages.length === 0) {
+      this.setStatus('that session has no readable messages')
+      this.paint()
+      return
+    }
+    const tail = messages.slice(-40)
+    const body = tail
+      .map((message) =>
+        message.role === 'user' ? `**you**\n\n${message.text}` : message.text,
+      )
+      .join('\n\n---\n\n')
+    this.showOverlay(
+      `**${row.title === '' ? sessionId : row.title}** · ${row.host}\n\n${body}`,
+      'read-only preview · esc to close',
+    )
   }
 
   private handleFleetPromptKey(key: Key): void {
