@@ -8,10 +8,16 @@
  * The NO_COLOR section runs in a child process: whether color is emitted at
  * all is read from the environment once, when the module is evaluated, so it
  * cannot be flipped from inside a run that has already imported the module.
- * This file re-executes itself with the variable set instead.
+ * This file re-executes itself with the variable set instead. The main path
+ * forces color on (`./force-color.ts`) so the suite does not depend on the
+ * shell it was started from.
  *
  * Run with: node --experimental-strip-types tests/theme-smoke.ts
  */
+
+// Must come before the theme import: theme.ts reads the environment once, at
+// evaluation time, and this suite asserts on the SGR bytes it emits.
+import './force-color.ts'
 
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
