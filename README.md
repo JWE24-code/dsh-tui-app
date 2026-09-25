@@ -107,7 +107,7 @@ overrides background detection; `NO_COLOR` disables styling.
 | `?` | Open the key reference on an empty composer |
 | `esc` | Interrupt a streaming reply |
 | `ctrl+n` / `ctrl+r` / `ctrl+t` | New session · resume · toggle thinking |
-| `pgup`/`pgdn` | Scroll a page · `ctrl+u`/`ctrl+d` half a page |
+| `pgup`/`pgdn` | Scroll a page · `ctrl+↑`/`ctrl+↓` half a page |
 | `shift+↑`/`shift+↓` | Scroll one line · `ctrl+g` jumps back to the newest |
 | `ctrl+o` | Expand or collapse the turn's tool calls |
 | `ctrl+x` | Compact the session |
@@ -115,9 +115,10 @@ overrides background detection; `NO_COLOR` disables styling.
 | `ctrl+y` | Copy the last reply to the clipboard |
 | `ctrl+f` | Fleet overview: sessions across every device |
 | `n` / `N` | With a search open and an empty composer, next / previous match |
-| `alt+1`…`alt+9` | Jump to a session · `alt+n`/`alt+p` cycle · `tab` cycles too |
+| `alt+1`…`alt+9` | Jump to a session · `alt+n`/`alt+p` cycle · `tab` cycles on an empty composer |
 | `ctrl+a`/`ctrl+e`/`home`/`end`, `ctrl+w`, `ctrl+k` | Line start/end, delete word, kill to end |
-| `alt+b`/`alt+f`, `ctrl+←`/`ctrl+→` | Word motion · `delete` deletes forward |
+| `ctrl+u` | Clear the composer line (readline) |
+| `ctrl+d` | Delete forward · `alt+b`/`alt+f`, `ctrl+←`/`ctrl+→` word motion |
 | `ctrl+c` | Sessions menu · press again within 1.5s to quit |
 
 In a list (`/model`, `/theme`, `/resume`): type to filter, `enter` selects, `esc` closes;

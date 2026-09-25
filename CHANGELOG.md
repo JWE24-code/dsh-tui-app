@@ -123,6 +123,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Readline-consistent composer chords** — `ctrl+u` clears the composer
+  line and `ctrl+d` deletes forward, as every shell does, instead of both
+  scrolling the transcript away under a draft. Half-page scrolling moved to
+  `ctrl+↑`/`ctrl+↓`, beside `shift+↑`/`shift+↓` (one line) and `pgup`/`pgdn`
+  (a page). `tab` no longer switches sessions while a draft is being typed;
+  cycling needs an empty composer, like `n`/`N` in a search. The picker's
+  `ctrl+u` (clear filter) is unchanged.
 - **Tool calls are expanded by default** — the transcript lists every tool
   call as it happens, with its detail line, instead of summarizing them
   behind a running counter. `ctrl+o` still collapses the pile into one line
