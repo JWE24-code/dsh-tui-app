@@ -208,6 +208,27 @@ export function jumpCommand(session: FleetSession, profile = 'tui'): string {
   return session.local ? resume : `ssh -t ${session.host} '${resume}'`
 }
 
+/**
+ * Quote one argument for a POSIX shell.
+ *
+ * A prompt is arbitrary text and is about to travel through `ssh`, which hands
+ * it to the remote shell — so it is single-quoted with the one escape a single
+ * quoted string has. Nothing here trusts the caller.
+ */
+export function shellQuote(text: string): string {
+  return `'${text.replaceAll("'", "'\\''")}'`
+}
+
+/**
+ * The argv for dispatching a task to a peer's headless profile.
+ *
+ * The prompt is quoted for the remote shell; the profile name and host are
+ * passed as separate argv words so the local shell never interprets them.
+ */
+export function dispatchArgv(host: string, profile: string, prompt: string): string[] {
+  return ['-o', 'BatchMode=yes', host, `dsh --profile ${profile} ${shellQuote(prompt)}`]
+}
+
 /** Options for {@link renderFleet}. */
 export interface FleetRenderOptions {
   width: number

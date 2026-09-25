@@ -115,7 +115,7 @@ import {
   type PersistedState,
 } from './persist.ts'
 import { VERSION } from './version.ts'
-import { FleetView, isValidPeer, jumpCommand, mergeFleet } from './tui/fleet.ts'
+import { FleetView, dispatchArgv, isValidPeer, jumpCommand, mergeFleet } from './tui/fleet.ts'
 import { PresencePublisher, type PresenceInput } from './presence.ts'
 import { collectFleet, localDshHome, type PeerConfig } from './fleet-sources.ts'
 import {
@@ -158,6 +158,11 @@ export interface Config {
   voiceModel?: string
   /** Whisper executable for push-to-talk; absent looks for the known names. */
   voiceBin?: string
+  /**
+   * The profile `/dispatch` boots on a peer. The shipped `headless` profile is
+   * the one that answers a single task and exits.
+   */
+  dispatchProfile?: string
 }
 
 export const Config: z<Config> = z.object({
@@ -171,6 +176,7 @@ export const Config: z<Config> = z.object({
   restore: z.boolean(),
   voiceModel: z.string(),
   voiceBin: z.string(),
+  dispatchProfile: z.string(),
 })
 
 /** Spinner frames for the streaming indicator. */
@@ -232,6 +238,11 @@ const BUILTIN_COMMANDS: readonly PaletteCommand[] = [
   { name: 'jobs', args: '[kill <id>]', description: 'Background jobs: what is running and what finished' },
   { name: 'mcp', args: '', description: 'MCP servers whose tools are mounted here' },
   { name: 'lang', args: '[en|zh-CN]', description: 'Interface language' },
+  {
+    name: 'dispatch',
+    args: '<device> <task>',
+    description: 'Run a task on a peer through its headless profile',
+  },
   { name: 'fleet', args: '', description: 'Sessions across every device (ctrl+f)' },
   { name: 'peer', args: '[add|rm <host>]', description: 'Devices the fleet overview reads' },
   { name: 'about', args: '', description: 'Show version and connection information' },
@@ -1640,9 +1651,77 @@ class TuiApp {
         void this.previewFleetSelection()
         break
 
+      case 'd': {
+        const row = this.fleet.current()
+        if (row === undefined || row.local) {
+          this.setStatus('select another device to dispatch to it')
+          this.paint()
+          break
+        }
+        const draft = this.composer.value().trim()
+        if (draft === '') {
+          this.setStatus('type the task in the composer, then press d here')
+          this.paint()
+          break
+        }
+        void this.dispatchTo(row.host, draft)
+        break
+      }
+
       default:
         break
     }
+  }
+
+  /**
+   * Run a task on a peer's headless profile over the SSH channel.
+   *
+   * The peer answers one task and exits, so this is dispatch rather than
+   * attach: the result comes back as an overlay and the session it left behind
+   * is the peer's to resume. The prompt is quoted for the remote shell by
+   * {@link dispatchArgv}, and BatchMode forbids an interactive password prompt
+   * from swallowing the terminal.
+   */
+  private async dispatchTo(device: string, task: string): Promise<void> {
+    if (!isValidPeer(device)) {
+      this.setStatus(`${device} is not a usable host`, true)
+      this.paint()
+      return
+    }
+    const profile = this.config.dispatchProfile ?? 'headless'
+    this.setStatus(`dispatching to ${device}…`)
+    this.paint()
+    const result = await new Promise<{ ok: boolean; out: string }>((resolve) => {
+      const child = spawn('ssh', dispatchArgv(device, profile, task), {
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      const out: Buffer[] = []
+      const err: Buffer[] = []
+      const timer = setTimeout(() => {
+        child.kill()
+        resolve({ ok: false, out: 'timed out after 10 minutes' })
+      }, 600_000)
+      child.stdout?.on('data', (chunk: Buffer) => out.push(chunk))
+      child.stderr?.on('data', (chunk: Buffer) => err.push(chunk))
+      child.on('error', (error: Error) => {
+        clearTimeout(timer)
+        resolve({ ok: false, out: error.message })
+      })
+      child.on('exit', (code: number | null) => {
+        clearTimeout(timer)
+        const stdout = Buffer.concat(out).toString('utf8')
+        const stderr = Buffer.concat(err).toString('utf8')
+        resolve({
+          ok: code === 0,
+          out: stdout.trim() === '' ? stderr.trim() : stdout.trim(),
+        })
+      })
+    })
+    const body = result.out === '' ? '(no output)' : result.out.slice(-8000)
+    this.showOverlay(
+      `**${device}** · \`${profile}\`\n\n${body}`,
+      result.ok ? 'esc to close' : 'the peer reported a failure · esc to close',
+    )
   }
 
   /**
@@ -3042,6 +3121,19 @@ class TuiApp {
       case 'mcp':
         this.showMcp()
         return
+
+      case 'dispatch': {
+        const words = rawInput.trim().split(/\s+/).filter((word) => word !== '')
+        const device = words.shift()
+        const task = words.join(' ')
+        if (device === undefined || task === '') {
+          this.setStatus('usage: /dispatch <device> <task>', true)
+          this.paint()
+          return
+        }
+        void this.dispatchTo(device, task)
+        return
+      }
 
       case 'lang': {
         const wanted = rawInput.trim()

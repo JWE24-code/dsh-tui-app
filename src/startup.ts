@@ -43,6 +43,8 @@ export interface TuiStartupValues {
   voiceModel: string | undefined
   /** Whisper executable for push-to-talk; absent looks for the known names. */
   voiceBin: string | undefined
+  /** Peer profile `/dispatch` boots; the shipped `headless` one by default. */
+  dispatchProfile: string | undefined
 }
 
 /** This app's command grammar, help text, and examples. */
@@ -67,6 +69,7 @@ function tuiCommand(): Command {
     )
     .option('--voice-model <path>', 'whisper.cpp weights for push-to-talk dictation (ctrl+v)')
     .option('--voice-bin <path>', 'whisper.cpp executable to transcribe with; default searches PATH')
+    .option('--dispatch-profile <name>', 'profile /dispatch boots on a peer; headless by default')
     .addHelpText(
       'after',
       `
@@ -101,6 +104,7 @@ export function apply(ctx: Context): void {
       peer?: string[]
       voiceModel?: string
       voiceBin?: string
+      dispatchProfile?: string
     }>()
 
     if (options.resume !== undefined && options.resume.trim() === '') {
@@ -137,6 +141,7 @@ export function apply(ctx: Context): void {
       // back to its own search, so passing nothing here is the normal case.
       voiceModel: options.voiceModel,
       voiceBin: options.voiceBin,
+      dispatchProfile: options.dispatchProfile,
     } satisfies TuiStartupValues)
   })
   parseCmdline(ctx, program)

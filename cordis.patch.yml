@@ -33,6 +33,7 @@
         restore: !!js ctx.tuiStartup.restore
         voiceModel: !!js ctx.tuiStartup.voiceModel
         voiceBin: !!js ctx.tuiStartup.voiceBin
+        dispatchProfile: !!js ctx.tuiStartup.dispatchProfile
 
 # The terminal owns the screen; a hot reload repainting underneath it would
 # corrupt the alternate buffer.

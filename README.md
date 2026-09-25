@@ -315,6 +315,12 @@ read-only preview, decoded here. Nothing on the peer is written, nothing new
 listens, and the path is built with the store's own segment encoder, so a
 hostile presence record cannot reach outside its own session directory.
 
+`d` dispatches instead of reading: the composer's text is sent to that peer's
+`headless` profile (`--dispatch-profile` changes it), which answers one task and
+exits. The prompt is quoted for the remote shell and SSH runs in `BatchMode`, so
+a password prompt can never swallow the terminal; the peer's answer comes back
+as an overlay, and the session it left behind stays the peer's to resume.
+
 The copied command is:
 
 ```sh

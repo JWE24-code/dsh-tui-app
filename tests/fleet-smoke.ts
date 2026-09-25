@@ -16,6 +16,8 @@ import { join } from 'node:path'
 import {
   DEFAULT_STALE_AFTER_MS,
   FleetView,
+  dispatchArgv,
+  shellQuote,
   PRESENCE_VERSION,
   fleetLineOf,
   fleetSummary,
@@ -499,6 +501,27 @@ check('surrounding space is tolerated', isValidPeer('  oma1  '))
   check('the hints advertise adding', back.some((line) => line.includes('a add')))
   check('the hints advertise removing', back.some((line) => line.includes('x remove')))
 }
+
+// ------------------------------------------------------- dispatch quoting
+
+check('a plain word is quoted', shellQuote('hello') === "'hello'")
+check('spaces survive quoting', shellQuote('run the tests') === "'run the tests'")
+check("a single quote is escaped", shellQuote("it's fine") === "'it'\\''s fine'")
+check('an empty prompt is still a word', shellQuote('') === "''")
+check(
+  'a semicolon cannot end the command',
+  shellQuote('a; rm -rf /') === "'a; rm -rf /'",
+)
+const argv = dispatchArgv('oma1', 'headless', 'run the tests')
+check('the host is one argv word', argv[2] === 'oma1')
+check('batch mode forbids a password prompt', argv.includes('BatchMode=yes'))
+check('the remote command names the profile', argv[3]?.includes('--profile headless') === true)
+check('the prompt travels quoted', argv[3]?.includes("'run the tests'") === true)
+check(
+  'an injected prompt stays inside the quotes',
+  dispatchArgv('oma1', 'headless', "x'; touch /tmp/pwned; '").join(' ').includes("'\\''"),
+)
+check('the ssh destination is not an option', argv[2]?.startsWith('-') === false)
 
 // eslint-disable-next-line no-console
 console.log(`ok - ${String(checks)} fleet checks passed`)
