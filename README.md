@@ -714,6 +714,9 @@ npm run test:package  # packs, installs into a clean prefix + DSH_HOME, boots
 npm publish           # prepublishOnly re-runs build + typecheck + npm test
 ```
 
+`prepublishOnly` runs all four gates, so publishing needs `dsh` on `PATH` — a
+broken artifact must fail the publish rather than reach the registry.
+
 `test:package` exists because the suites all run from the source checkout,
 where `link-types` has already made the Harness resolvable — which is exactly
 how a tarball that could not resolve `@deepseek-ai/*` once passed every test
