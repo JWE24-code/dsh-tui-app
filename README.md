@@ -612,6 +612,22 @@ ctrl+c — so the terminal layer is proven by a round trip, not types alone.
 whole suite on Node 22 and 24 plus a typecheck against the real Harness
 packages.
 
+## Performance
+
+Rendering is a per-line diff over a zero-dependency renderer, and each settled
+transcript turn's lines are cached by identity and width, so a frame re-renders
+only what changed. Measured with `npm run bench` (Node 26, 200x60 window):
+
+| Transcript | Before the message cache | Now |
+|---|---|---|
+| 400 messages | 25.3 ms/frame | **0.16 ms/frame** |
+
+A full scroll or a spinner tick therefore costs a fraction of the 80 ms it has
+between paints, which is what makes a long session stay smooth. The benchmark
+prints numbers instead of asserting them; the test suite only asserts an
+order-of-magnitude bound, so machine noise cannot fail a build while a cache
+regression still would.
+
 ## Status and caveats
 
 - **Verified against real `dsh` installs** (0.1.5-rc.3 and 0.1.7-rc.2; CI typechecks both `latest` and `next`):

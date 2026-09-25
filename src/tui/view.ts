@@ -456,6 +456,38 @@ function renderMessageBody(
 }
 
 /** The whole transcript, including the reply currently streaming in. */
+/**
+ * Rendered lines for one settled message, keyed by the message object.
+ *
+ * A frame only ever shows a window of a long transcript, but the viewport is
+ * sliced from fully rendered lines — so without this cache every paint
+ * re-rendered and re-highlighted the entire conversation. Messages are
+ * immutable once committed, and the width is part of the key, so a hit is
+ * always correct; a resize simply misses.
+ */
+const messageLineCache = new WeakMap<Message, { width: number; lines: string[] }>()
+
+/** Render one message through the cache. */
+function cachedMessageLines(
+  message: Message,
+  width: number,
+  showThinking: boolean,
+  toolStyle: ToolStyle,
+  selected: boolean,
+): string[] {
+  // A streaming turn animates and a selected turn carries a bar, so neither
+  // may be served from the cache of its unmarked form.
+  const animating = toolStyle.spinner !== '' && (message.tools ?? []).length > 0
+  if (animating || selected) {
+    return renderMessage(message, width, showThinking, toolStyle, selected)
+  }
+  const hit = messageLineCache.get(message)
+  if (hit !== undefined && hit.width === width) return hit.lines
+  const lines = renderMessage(message, width, showThinking, toolStyle)
+  messageLineCache.set(message, { width, lines })
+  return lines
+}
+
 function transcript(snapshot: Snapshot, width: number): string[] {
   // A settled turn never animates, so its spinner frame is irrelevant.
   const settled: ToolStyle = { expand: snapshot.expandTools, spinner: '', elapsed: 0 }
@@ -467,7 +499,7 @@ function transcript(snapshot: Snapshot, width: number): string[] {
 
   const blocks: string[][] = []
   snapshot.messages.forEach((message, index) => {
-    const rendered = renderMessage(
+    const rendered = cachedMessageLines(
       message,
       width,
       snapshot.showThinking,
