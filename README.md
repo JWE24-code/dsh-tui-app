@@ -426,6 +426,29 @@ The choice is saved with the rest of the durable state and applied before the
 first frame, so it survives a restart. Switching repaints the whole screen at
 once, since a palette change moves the color of nearly every cell.
 
+## When the agent stops to ask
+
+Three moments hand the keyboard to a panel in place of the transcript, and all
+three answer through the Harness's own seams — the `approval/request` and
+`user-questions/request` waterfalls — so no answer is faked and a headless
+mount fails closed rather than swallowing a prompt it cannot show.
+
+**Tool approval.** When the permission layer needs a decision, the panel shows
+the tool, the exact command from the tool call already in the transcript, and
+the asker's reason: `1` allows once, `2` or `esc` denies. The protocol has no
+persistent grant, so nothing offers one.
+
+**`ask_user_question`.** Options navigate with `↑`/`↓`, `space` toggles a
+multi-select, `enter` answers and advances, `tab` moves to the free-text line,
+and `esc` steps back a question before it cancels the set (`ASK_CANCELLED`).
+Typing on an option row answers with that option plus your text, the way a
+form does.
+
+**Plan review.** `exit_plan_mode` renders the plan as markdown with its own
+Approve / Keep-planning options. Approving never carries feedback — the
+protocol reads feedback as "keep planning" — so typing while feedback is not a
+decision is kept as feedback only on a declining answer.
+
 ## Commands
 
 The palette merges two sources, so it shows whatever the Harness has actually

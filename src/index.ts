@@ -61,6 +61,10 @@ import {
   type AtMatch,
 } from './tui/atfile.ts'
 import { FileIndex } from './file-index.ts'
+import { ApprovalPanel, QuestionsPanel, type ApprovalDecision } from './tui/panels.ts'
+import { UserQuestionError } from '@deepseek-ai/dsh-user-questions'
+import type { AskUserQuestionAnswer, AskUserQuestionRequest } from '@deepseek-ai/dsh-user-questions'
+import type {} from '@deepseek-ai/dsh-user-approval'
 import {
   HELP_TEXT,
   findMatches,
@@ -228,6 +232,19 @@ interface PromptDraft {
   images: readonly ImageAttachmentRef[]
 }
 
+/** A tool approval waiting for the user, and the promise that answers it. */
+interface PendingApproval {
+  request: { toolName: string; reason?: string; callId?: string; signal?: AbortSignal }
+  resolve: (decision: ApprovalDecision) => void
+}
+
+/** A question set waiting for the user, and the promise that answers it. */
+interface PendingQuestion {
+  request: AskUserQuestionRequest
+  resolve: (answer: AskUserQuestionAnswer) => void
+  reject: (error: Error) => void
+}
+
 interface SessionTab {
   id: string
   agent: Agent | undefined
@@ -332,6 +349,10 @@ class TuiApp {
   private readonly picker = new Picker()
   /** The `@` file-completion menu, driven by the composer like the palette. */
   private readonly atMenu = new AtMenu()
+  /** The trust-surface panel on screen, if any: it owns the keyboard. */
+  private panel: ApprovalPanel | QuestionsPanel | undefined
+  private readonly pendingApprovals: PendingApproval[] = []
+  private readonly pendingQuestions: PendingQuestion[] = []
   /** Workspace file listing for `@` completion, rebuilt lazily. */
   private fileIndex: FileIndex | undefined
   /** The token esc dismissed, so typing more reopens the menu but esc stays. */
@@ -488,6 +509,215 @@ class TuiApp {
     }
     this.screen.start()
     this.installSignalHandlers()
+    this.registerTrustSurfaces()
+    this.paint()
+  }
+
+  /**
+   * Answer the agent's own questions: tool approvals and `ask_user_question`.
+   *
+   * Both seams are Cordis waterfalls. Claiming the request means returning an
+   * outcome and showing a panel; delegating with `next()` means some other
+   * UI — or the fail-closed default — decides. The app claims only when it is
+   * actually drawing: a headless mount must never swallow a prompt it cannot
+   * show, so everything unmatched falls through.
+   */
+  private registerTrustSurfaces(): void {
+    this.disposers.push(
+      this.ctx.on('approval/request', async (request, next) => {
+        if (!this.ownsRequest(request.agent)) return await next()
+        return await new Promise((resolve) => {
+          const pending = { request, resolve }
+          this.pendingApprovals.push(pending)
+          if (request.signal !== undefined) {
+            request.signal.addEventListener(
+              'abort',
+              () => {
+                this.dropApproval(pending)
+                resolve('cancelled')
+              },
+              { once: true },
+            )
+          }
+          if (this.panel === undefined) this.activateNextPanel()
+          this.paint()
+        })
+      }),
+    )
+    this.disposers.push(
+      this.ctx.on('user-questions/request', async (request, next) => {
+        if (request.agent !== undefined && !this.ownsRequest(request.agent)) return await next()
+        return await new Promise<AskUserQuestionAnswer>((resolve, reject) => {
+          const pending = { request, resolve, reject }
+          this.pendingQuestions.push(pending)
+          if (request.signal !== undefined) {
+            request.signal.addEventListener(
+              'abort',
+              () => {
+                this.dropQuestion(pending)
+                reject(new UserQuestionError('the user closed the question', 'ASK_CANCELLED'))
+              },
+              { once: true },
+            )
+          }
+          if (this.panel === undefined) this.activateNextPanel()
+          this.paint()
+        })
+      }),
+    )
+  }
+
+  /** Whether an ask belongs to an agent this terminal is driving. */
+  private ownsRequest(agent: Agent | undefined): boolean {
+    if (this.stopped) return false
+    if (agent === undefined) return Screen.isInteractive()
+    // Subagents delegate from a tab's agent; the root of the lineage is ours.
+    if (this.tabs.some((tab) => tab.agent === agent)) return true
+    return false
+  }
+
+  /** Show the oldest waiting panel, if no panel is up. */
+  private activateNextPanel(): void {
+    if (this.panel !== undefined) return
+    const approval = this.pendingApprovals[0]
+    if (approval !== undefined) {
+      this.panel = new ApprovalPanel(
+        approval.request.toolName,
+        approval.request.reason,
+        this.commandForCall(approval.request.callId),
+      )
+      return
+    }
+    const question = this.pendingQuestions[0]
+    if (question !== undefined) {
+      this.panel = new QuestionsPanel([...question.request.questions])
+    }
+  }
+
+  /** The full command behind an approval, read from the tool call already streamed. */
+  private commandForCall(callId: string | undefined): string | undefined {
+    if (callId === undefined) return undefined
+    for (const message of this.tab.messages) {
+      for (const tool of message.tools ?? []) {
+        if (tool.id === callId && tool.detail !== undefined) return tool.detail
+      }
+    }
+    for (const tool of this.tab.streamingTools) {
+      if (tool.id === callId && tool.detail !== undefined) return tool.detail
+    }
+    return undefined
+  }
+
+  private dropApproval(pending: PendingApproval): void {
+    const at = this.pendingApprovals.indexOf(pending)
+    if (at !== -1) this.pendingApprovals.splice(at, 1)
+  }
+
+  private dropQuestion(pending: PendingQuestion): void {
+    const at = this.pendingQuestions.indexOf(pending)
+    if (at !== -1) this.pendingQuestions.splice(at, 1)
+  }
+
+  /**
+   * Answer the open approval and move on to whoever is next in line.
+   */
+  private settleApproval(panel: ApprovalPanel, decision: ApprovalDecision): void {
+    const pending = this.pendingApprovals.shift()
+    this.panel = undefined
+    this.activateNextPanel()
+    if (pending !== undefined) {
+      this.setStatus(decision === 'allowed-once' ? `allowed ${panel.toolName} once` : `denied ${panel.toolName}`)
+      pending.resolve(decision)
+    }
+    this.paint()
+  }
+
+  private settleQuestion(panel: QuestionsPanel, cancel: boolean): void {
+    const pending = this.pendingQuestions.shift()
+    this.panel = undefined
+    this.activateNextPanel()
+    if (pending !== undefined) {
+      if (cancel) pending.reject(new UserQuestionError('the user cancelled the question', 'ASK_CANCELLED'))
+      else pending.resolve({ answers: panel.answers() })
+    }
+    this.paint()
+  }
+
+  /** Keys while a trust-surface panel owns the keyboard. */
+  private handlePanelKey(key: Key): void {
+    const panel = this.panel
+    if (panel === undefined) return
+    if (panel instanceof ApprovalPanel) {
+      switch (key.name) {
+        case 'up':
+        case 'ctrl+p':
+          panel.move(-1)
+          break
+        case 'down':
+        case 'ctrl+n':
+          panel.move(1)
+          break
+        case '1':
+          this.settleApproval(panel, 'allowed-once')
+          return
+        case '2':
+          this.settleApproval(panel, 'rejected')
+          return
+        case 'enter':
+          this.settleApproval(panel, panel.decision())
+          return
+        case 'esc':
+        case 'ctrl+c':
+          // Fail closed: esc means no.
+          this.settleApproval(panel, 'rejected')
+          return
+        default:
+          break
+      }
+      this.paint()
+      return
+    }
+
+    switch (key.name) {
+      case 'up':
+      case 'ctrl+p':
+        panel.move(-1)
+        break
+      case 'down':
+      case 'ctrl+n':
+        panel.move(1)
+        break
+      case 'space':
+        panel.toggle()
+        break
+      case 'tab':
+        panel.focusCustom()
+        break
+      case 'enter': {
+        const state = panel.advance()
+        if (state === 'done') {
+          this.settleQuestion(panel, false)
+          return
+        }
+        if (state === 'empty') this.setStatus('choose an option or type an answer')
+        break
+      }
+      case 'esc':
+        if (!panel.back()) {
+          this.settleQuestion(panel, true)
+          return
+        }
+        break
+      case 'ctrl+c':
+        this.settleQuestion(panel, true)
+        return
+      case 'backspace':
+        panel.backspaceText()
+        break
+      default:
+        if (key.text !== '') panel.typeText(key.text)
+        break
+    }
     this.paint()
   }
 
@@ -951,6 +1181,7 @@ class TuiApp {
       confirmText: this.confirming ? this.confirmPrompt : undefined,
       searchActive: this.search !== undefined,
       fleet: this.fleet,
+      panel: this.panel?.view(),
       voice: this.voicePhase,
     }
   }
@@ -1378,6 +1609,10 @@ class TuiApp {
       // navigation, then ctrl+c again should open the menu, not lose the
       // session to a stale confirmation.
       if (key.name !== 'ctrl+c') this.lastQuitRequest = 0
+      if (this.panel !== undefined) {
+        this.handlePanelKey(key)
+        return
+      }
       if (this.fleet.open) {
         this.handleFleetKey(key)
         return

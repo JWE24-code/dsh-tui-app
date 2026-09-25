@@ -45,6 +45,7 @@ import {
   warn,
 } from './theme.ts'
 import { isImagePath, type AtMenu } from './atfile.ts'
+import type { PanelView } from './panels.ts'
 
 /** Most file-completion rows listed at once before the popup scrolls. */
 const MAX_AT_ROWS = 6
@@ -121,6 +122,11 @@ export interface Snapshot {
    * Optional so every existing snapshot builder renders exactly as before.
    */
   atMenu?: AtMenu
+  /**
+   * A trust-surface panel (approval, question, plan review). While one is
+   * open it owns the keyboard and replaces the transcript.
+   */
+  panel?: PanelView
 }
 
 /** What push-to-talk is doing, for the footer indicator. */
@@ -935,11 +941,13 @@ export function render(snapshot: Snapshot): {
 
   if (geometry.viewportRows > 0) {
     const body =
-      snapshot.fleet?.open === true
-        ? fleetPane(snapshot, geometry)
-        : snapshot.picker.kind === 'none'
-          ? viewport(snapshot, geometry)
-          : pickerPane(snapshot, geometry)
+      snapshot.panel !== undefined
+        ? panelPane(snapshot, geometry)
+        : snapshot.fleet?.open === true
+          ? fleetPane(snapshot, geometry)
+          : snapshot.picker.kind === 'none'
+            ? viewport(snapshot, geometry)
+            : pickerPane(snapshot, geometry)
     rows.push(...body)
   }
   if (geometry.showGap) rows.push('')
@@ -961,13 +969,47 @@ export function render(snapshot: Snapshot): {
   // of that box is about to be shifted right by the gutter.
   const lines = rows.map((line) => gutter + line)
   const cursor =
-    snapshot.picker.kind === 'none' && snapshot.fleet?.open !== true
+    snapshot.picker.kind === 'none' && snapshot.fleet?.open !== true && snapshot.panel === undefined
       ? {
           row: composerTop + composer.cursor.row,
           column: composer.cursor.column + gutter.length,
         }
       : undefined
   return { lines, cursor }
+}
+
+/**
+ * A trust-surface panel: what the agent is asking, the choices, and the way
+ * out. It borrows the transcript's rows rather than floating, so a small
+ * terminal still shows the whole decision.
+ */
+function panelPane(snapshot: Snapshot, geometry: Layout): string[] {
+  const panel = snapshot.panel
+  if (panel === undefined) return []
+  const width = geometry.contentWidth
+  const inner = Math.max(width - 2, 10)
+  const out: string[] = []
+
+  out.push(bold(truncate(panel.title, inner)))
+  out.push('')
+  const detail = panel.detail.trim()
+  if (detail !== '') {
+    for (const line of renderMarkdown(detail, width).split('\n')) out.push(truncate(line, inner))
+    out.push('')
+  }
+  for (const row of panel.rows) {
+    const mark = row.checked === undefined ? (row.selected ? '❯' : ' ') : row.checked ? '◉' : '○'
+    const body = truncate(`${mark} ${row.label}${row.description === undefined ? '' : `  ${row.description}`}`, inner)
+    out.push(row.selected ? selected(padEnd(body, inner)) : body)
+  }
+  if (panel.inputLabel !== undefined) {
+    const text = panel.inputText === undefined || panel.inputText === '' ? '(type an answer)' : panel.inputText
+    const line = truncate(`${panel.inputLabel}: ${text}`, inner)
+    out.push(panel.inputFocused === true ? selected(padEnd(line, inner)) : muted(line))
+  }
+  out.push('')
+  out.push(muted(truncate(panel.hint, inner)))
+  return out.slice(0, Math.max(geometry.viewportRows, 0))
 }
 
 /**
@@ -992,39 +1034,39 @@ export const HELP_TEXT = [
   '- `pgup` / `pgdn` — page · `shift+↑` / `shift+↓` — one line · `ctrl+g` — newest',
   '- `ctrl+↑` / `ctrl+↓` — half page · `ctrl+u` — clear the composer',
   '- `alt+e` — edit the draft in $VISUAL/$EDITOR · `ctrl+o` — tool calls',
-  '- `ctrl+x` — compact the session',
-  '- `ctrl+b` — show what the background agents are doing',
-  '- `ctrl+y` — copy the last reply · `ctrl+f` — sessions across every device',
-  '- `ctrl+v` — push to talk: record, then transcribe into the composer',
+  '- `ctrl+x` — compact the session · `ctrl+b` — background agents',
+  '- `ctrl+y` — copy the last reply · `ctrl+f` — every device · `ctrl+v` — push to talk',
   '- `?` — open this help on an empty composer',
   '',
   '**Sessions**',
   '',
-  '- `ctrl+n` — open another session · `alt+1`…`alt+9` — jump to one',
-  '- `alt+n` / `alt+p` / `tab` (empty composer) — cycle · `/sessions` — pick, or start one',
+  '- `ctrl+n` — new session · `alt+1`…`alt+9` jump · `tab` on empty cycles · `/sessions` picks',
   '- `/close` — close · `/rename <title>` — name it · done rings the bell ●',
   '- `ctrl+a` / `ctrl+e` — start / end of line · `ctrl+w` — delete word · `ctrl+d` — delete forward',
-  '- `ctrl+c` — sessions menu · again within 1.5s — quit',
   '',
   '**Fleet** (`ctrl+f`, `/fleet`) — every device running this app, by machine',
   '',
   '- `↑` / `↓` or `j` / `k` — move · `r` — refresh · `esc` — back · `enter` — open',
-  '- a session on another device copies the `ssh` command that reaches it',
-  '- add devices with `--peer <host>`; each is read over SSH, nothing listens',
+  '- a session elsewhere copies the `ssh` that reaches it; `--peer <host>` adds one',
   '',
   '**Plugins** (`/plugins`) — the packages this profile composes',
   '',
   '- `enter` — enable or disable the selected package · restart to apply',
-  '- `/plugins add <pkg>` · `/plugins remove <pkg>` — both ask to confirm',
-  '- installing runs the package\'s install scripts as you; ● marks composed',
+  '- `/plugins add|remove <pkg>` — both confirm; install scripts run as you',
   '',
   '**Searching, palettes and lists**',
   '',
   '- `/find <text>` — search · `n` / `N` on an empty composer — next / previous',
-  '- `/theme` — pick a color palette · `mono` is greyscale and high contrast',
-  '- in a list: type to filter · `ctrl+u` clears · `esc` closes · ● is in use',
+  '- `/theme` — pick a palette · `mono` is greyscale · in a list: type to filter',
+  '',
+  '**Decisions** — when the agent stops to ask, the panel owns the keyboard',
+  '',
+  '- approval: `1` allow once · `2` / `esc` deny · questions: `↑`/`↓`, `space`, `enter`, `tab`',
+  '- plan review: `enter` approves or keeps planning · typing is feedback',
   '',
   '**Commands**',
   '',
   'Type `/` for every command the harness has registered, its own plugins too.',
+  '',
+  '- `ctrl+c` — sessions menu · again within 1.5s — quit',
 ].join('\n')
