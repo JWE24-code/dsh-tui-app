@@ -96,6 +96,10 @@ export interface Snapshot {
   totalTokens: number
   haveUsage: boolean
   contextLimit: number
+  /** Output tokens per second for the last settled turn; 0 when unknown. */
+  tps?: number
+  /** Prompt tokens served from cache, and the total prompt tokens they came from. */
+  cacheReadTokens?: number
   confirming: boolean
   /** Set while confirming: the yes/no question, drawn in the composer. */
   confirmText?: string
@@ -853,6 +857,15 @@ function footer(snapshot: Snapshot, width: number): string {
     segments.push(
       muted(`↑${formatTokens(snapshot.promptTokens)} ↓${formatTokens(snapshot.completionTokens)}`),
     )
+    const tps = snapshot.tps ?? 0
+    if (tps > 0) segments.push(muted(`${tps.toFixed(0)} tok/s`))
+    // A cache-hit rate is only honest when the prompt was non-trivial: an
+    // empty request reads as 100% and means nothing.
+    const cacheRead = snapshot.cacheReadTokens ?? 0
+    if (cacheRead > 0 && snapshot.promptTokens > 0) {
+      const rate = Math.min(Math.floor((cacheRead * 100) / snapshot.promptTokens), 100)
+      segments.push(muted(`cache ${String(rate)}%`))
+    }
   }
 
   let left = segments.join(separator)
@@ -1068,7 +1081,7 @@ export const HELP_TEXT = [
   '**Sessions**',
   '',
   '- `ctrl+n` — new session · `alt+1`…`alt+9` jump · `tab` on empty cycles · `/sessions` picks',
-  '- `/close` · `/rename <t>` · `/rewind` redo a prompt · `/fork` twin · `/tree` lineage',
+  '- `/close` · `/rename <t>` · `/rewind` redo · `/fork` twin · `/tree` lineage · `/jobs`',
   '- `ctrl+a` / `ctrl+e` — start / end of line · `ctrl+w` — delete word · `ctrl+d` — delete forward',
   '',
   '**Fleet** (`ctrl+f`, `/fleet`) — every device running this app, by machine',

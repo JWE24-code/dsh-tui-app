@@ -63,6 +63,7 @@ import {
 } from './tui/atfile.ts'
 import { FileIndex } from './file-index.ts'
 import { forkCut, lineage, projectUserTurns, rewindTarget } from './rewind.ts'
+import { renderJobs, type JobLike } from './tui/jobs.ts'
 import { ApprovalPanel, QuestionsPanel, type ApprovalDecision } from './tui/panels.ts'
 import { UserQuestionError } from '@deepseek-ai/dsh-user-questions'
 import type { AskUserQuestionAnswer, AskUserQuestionRequest } from '@deepseek-ai/dsh-user-questions'
@@ -214,6 +215,7 @@ const BUILTIN_COMMANDS: readonly PaletteCommand[] = [
   },
   { name: 'fork', args: '', description: 'Copy this session into a resumable twin' },
   { name: 'tree', args: '', description: 'Show this session’s family tree of forks' },
+  { name: 'jobs', args: '[kill <id>]', description: 'Background jobs: what is running and what finished' },
   { name: 'fleet', args: '', description: 'Sessions across every device (ctrl+f)' },
   { name: 'peer', args: '[add|rm <host>]', description: 'Devices the fleet overview reads' },
   { name: 'about', args: '', description: 'Show version and connection information' },
@@ -268,6 +270,14 @@ interface SessionTab {
   completionTokens: number
   totalTokens: number
   haveUsage: boolean
+  /** Prompt tokens the provider served from cache on the last attempt. */
+  cacheReadTokens: number
+  /** Prompt tokens the provider wrote to cache on the last attempt. */
+  cacheWriteTokens: number
+  /** Output tokens at the moment the current turn began, for a turn's own rate. */
+  turnStartTokens: number
+  /** Output tokens per second for the last settled turn. */
+  tps: number
   scrollBack: number
   /**
    * Prompts queued while a reply was streaming. They wait here until the
@@ -322,6 +332,10 @@ function newTab(id: string): SessionTab {
     completionTokens: 0,
     totalTokens: 0,
     haveUsage: false,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    turnStartTokens: 0,
+    tps: 0,
     scrollBack: 0,
     queued: [],
     drainQueue: false,
@@ -1187,6 +1201,8 @@ class TuiApp {
       completionTokens: this.tab.completionTokens,
       totalTokens: this.tab.totalTokens,
       haveUsage: this.tab.haveUsage,
+      tps: this.tab.tps,
+      cacheReadTokens: this.tab.cacheReadTokens,
       contextLimit: this.tab.contextLimit,
       confirming: this.confirming,
       confirmText: this.confirming ? this.confirmPrompt : undefined,
@@ -2631,6 +2647,7 @@ class TuiApp {
 
     tab.streaming = true
     tab.streamStartedAt = Date.now()
+    tab.turnStartTokens = tab.completionTokens
     tab.drainQueue = false
     tab.streamingText = ''
     tab.streamingReasoning = ''
@@ -2663,6 +2680,9 @@ class TuiApp {
       this.setStatus(describeError(error), true)
     } finally {
       this.abort = undefined
+      const turnSeconds = (Date.now() - tab.streamStartedAt) / 1000
+      const turnOutput = tab.completionTokens - tab.turnStartTokens
+      tab.tps = turnSeconds > 0 && turnOutput > 0 ? turnOutput / turnSeconds : 0
       tab.streaming = false
       tab.streamStartedAt = 0
       this.releaseSpinner()
@@ -2866,6 +2886,10 @@ class TuiApp {
 
       case 'tree':
         void this.showTree()
+        return
+
+      case 'jobs':
+        this.showJobs(rawInput)
         return
 
       case 'interrupt': {
@@ -3211,6 +3235,55 @@ class TuiApp {
       ].join('\n'),
       'esc to close',
     )
+  }
+
+  /**
+   * `/jobs` — what ran or is running in the background, and how to stop one.
+   *
+   * The registry is scoped to the agent that owns each job, so the list is the
+   * current session's jobs plus whatever it delegated.
+   */
+  private showJobs(requested: string): void {
+    const registry = this.ctx.get('jobs') as JobRegistryLike | undefined
+    if (registry === undefined) {
+      this.setStatus('this profile composes no background job registry', true)
+      this.paint()
+      return
+    }
+    const words = requested.trim().split(/\s+/).filter((word) => word !== '')
+    if (words[0] === 'kill') {
+      const id = words[1]
+      if (id === undefined) {
+        this.setStatus('usage: /jobs kill <id>', true)
+        this.paint()
+        return
+      }
+      try {
+        const outcome = registry.kill(id, this.tab.agent)
+        this.setStatus(outcome === 'requested' ? `stopping ${id}` : `${id} had already finished`)
+      } catch (error) {
+        this.setStatus(describeError(error), true)
+      }
+      this.paint()
+      return
+    }
+    let jobs: JobLike[] = []
+    try {
+      jobs = registry.list(this.tab.agent).map((job) => ({
+        id: String(job.id),
+        kind: String(job.kind),
+        label: job.label,
+        status: job.status,
+        detail: job.detail,
+        startedAt: job.startedAt,
+        finishedAt: job.finishedAt,
+      }))
+    } catch (error) {
+      this.setStatus(describeError(error), true)
+      this.paint()
+      return
+    }
+    this.showOverlay(renderJobs(jobs), 'esc to close')
   }
 
   /**
@@ -3699,6 +3772,23 @@ interface SessionTitleLike {
 }
 
 /** The subset of `ctx.sessionQuery` the picker uses, probed defensively. */
+/**
+ * The subset of `ctx.jobs` the app calls, probed rather than injected so a
+ * profile without a job registry still runs (the command says so instead).
+ */
+interface JobRegistryLike {
+  list: (caller?: unknown) => {
+    id: unknown
+    kind: unknown
+    label: string
+    status: string
+    detail?: string
+    startedAt: number
+    finishedAt?: number
+  }[]
+  kill: (id: string, caller?: unknown, reason?: string) => 'requested' | 'already-finished'
+}
+
 interface SessionQueryLike {
   listSessions?: (options?: unknown) => Promise<unknown> | unknown
   list?: (options?: unknown) => Promise<unknown> | unknown

@@ -29,6 +29,9 @@ function surface(): StreamingSurface {
     completionTokens: 0,
     totalTokens: 0,
     haveUsage: false,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    tps: 0,
   }
 }
 
@@ -136,6 +139,27 @@ function chunk(index: number): StreamChunkLike {
   const s = surface()
   projectStreamChunk(s, { type: 'usage', usage: { inputTokens: 10, outputTokens: 5 } })
   check('total is derived when the provider omits it', s.totalTokens === 15)
+}
+
+{
+  const s = surface()
+  projectStreamChunk(s, {
+    type: 'usage',
+    usage: {
+      inputTokens: 1000,
+      outputTokens: 50,
+      cacheReadTokens: 640,
+      cacheWriteTokens: 120,
+    },
+  })
+  check('cache reads are carried', s.cacheReadTokens === 640)
+  check('cache writes are carried', s.cacheWriteTokens === 120)
+}
+
+{
+  const s = surface()
+  projectStreamChunk(s, { type: 'usage', usage: { inputTokens: 10, outputTokens: 5 } })
+  check('a provider without cache reporting reads as zero', s.cacheReadTokens === 0)
 }
 
 // --- unknown and non-tool-call frames are ignored --------------------------

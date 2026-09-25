@@ -428,6 +428,19 @@ The choice is saved with the rest of the durable state and applied before the
 first frame, so it survives a restart. Switching repaints the whole screen at
 once, since a palette change moves the color of nearly every cell.
 
+## Rate, cache, and background jobs
+
+The footer carries what the provider reports: prompt and completion tokens, the
+context bar, output tokens per second for the last settled turn, and the share
+of the prompt that came from the provider's cache. Each is displayed only when
+it is real — an unmeasurable rate or a cache hit on an empty prompt is omitted
+rather than faked.
+
+`/jobs` lists what ran or is still running in the background for this session —
+state, elapsed time, and the producer's own detail line — with running jobs
+first and finished ones newest first. `/jobs kill <id>` stops one. A profile
+with no job registry says so instead of showing an empty list.
+
 ## Rewinding and forking
 
 `/rewind` lists every prompt in the conversation; picking one forks the session
@@ -475,7 +488,7 @@ alongside the app's own:
 | Command | Owner |
 |---|---|
 | `/compact`, and any other plugin command | `ctx.commands` (the Harness registry) |
-| `/new`, `/sessions`, `/close`, `/resume`, `/delete`, `/rename`, `/model`, `/theme`, `/thinking`, `/tools`, `/export`, `/find`, `/unqueue`, `/interrupt`, `/copy`, `/about`, `/help`, `/exit` (`/quit`) | this app |
+| `/new`, `/sessions`, `/close`, `/resume`, `/delete`, `/rename`, `/model`, `/theme`, `/thinking`, `/tools`, `/export`, `/find`, `/unqueue`, `/interrupt`, `/copy`, `/rewind`, `/fork`, `/tree`, `/jobs`, `/about`, `/update`, `/help`, `/exit` (`/quit`) | this app |
 
 Unknown commands are dispatched to `ctx.commands.execute()` and only reported
 as unknown if the registry also rejects them.

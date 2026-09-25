@@ -34,6 +34,12 @@ export interface StreamingSurface {
   completionTokens: number
   totalTokens: number
   haveUsage: boolean
+  /** Prompt tokens served from the provider's cache, when it reports them. */
+  cacheReadTokens: number
+  /** Prompt tokens written to the provider's cache, when it reports them. */
+  cacheWriteTokens: number
+  /** Output tokens per second for the last settled turn, when measurable. */
+  tps: number
 }
 
 /**
@@ -47,7 +53,13 @@ export interface StreamChunkLike {
   text?: string
   id?: string | number
   name?: string
-  usage?: { inputTokens: number; outputTokens: number; totalTokens?: number }
+  usage?: {
+    inputTokens: number
+    outputTokens: number
+    totalTokens?: number
+    cacheReadTokens?: number
+    cacheWriteTokens?: number
+  }
   block?: { type: string; id?: string | number; name?: string; arguments?: string }
   /** Rendered fields the union carries but this app ignores. */
   index?: number
@@ -99,6 +111,8 @@ export function projectStreamChunk(surface: StreamingSurface, chunk: StreamChunk
       surface.promptTokens = usage.inputTokens
       surface.completionTokens = usage.outputTokens
       surface.totalTokens = usage.totalTokens ?? usage.inputTokens + usage.outputTokens
+      surface.cacheReadTokens = usage.cacheReadTokens ?? 0
+      surface.cacheWriteTokens = usage.cacheWriteTokens ?? 0
       surface.haveUsage = true
       break
     }
