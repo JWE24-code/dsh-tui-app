@@ -35,6 +35,8 @@ export interface TuiStartupValues {
   mouse: boolean
   /** Ring the bell when a session's turn finishes; on by default. */
   bell: boolean
+  /** Devices to include in the fleet overview; empty means this one only. */
+  peers: string[]
 }
 
 /** This app's command grammar, help text, and examples. */
@@ -50,6 +52,12 @@ function tuiCommand(): Command {
     .option('--context-limit <tokens>', "context budget override; default is the model's own capacity")
     .option('--mouse', 'report mouse events so the wheel scrolls (disables terminal text selection)')
     .option('--no-bell', 'stay silent when a session finishes instead of ringing the terminal bell')
+    .option(
+      '--peer <host>',
+      'device to include in the fleet overview; repeatable, anything ssh accepts',
+      (value: string, previous: string[]) => [...previous, value],
+      [],
+    )
     .addHelpText(
       'after',
       `
@@ -57,6 +65,7 @@ Examples:
   dsh --profile tui                      start a new session
   dsh --profile tui --resume session-...  reopen an existing session
   dsh --profile tui --thinking            show the reasoner's chain of thought
+  dsh --profile tui --peer laptop         include another device in ctrl+f
 
 Inside the app, type / for the command palette; press ctrl+c for the sessions
 menu and ctrl+c again within 1.5s to quit.
@@ -78,6 +87,7 @@ export function apply(ctx: Context): void {
       contextLimit?: string
       mouse?: boolean
       bell?: boolean
+      peer?: string[]
     }>()
 
     if (options.resume !== undefined && options.resume.trim() === '') {
@@ -108,6 +118,7 @@ export function apply(ctx: Context): void {
       mouse: options.mouse === true,
       // commander maps --no-bell to bell: false and leaves it true otherwise.
       bell: options.bell !== false,
+      peers: options.peer ?? [],
     } satisfies TuiStartupValues)
   })
   parseCmdline(ctx, program)

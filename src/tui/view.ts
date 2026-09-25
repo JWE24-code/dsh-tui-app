@@ -7,6 +7,12 @@
  * @module
  */
 
+import {
+  fleetLineOf,
+  fleetSummary,
+  renderFleet,
+  type FleetView,
+} from './fleet.ts'
 import { renderMarkdown } from './markdown.ts'
 import {
   Composer,
@@ -95,6 +101,11 @@ export interface Snapshot {
    * queue render exactly as before.
    */
   queued?: readonly string[]
+  /**
+   * The cross-device overview, when one is open. Optional so every existing
+   * snapshot builder renders exactly as before.
+   */
+  fleet?: FleetView
 }
 
 /** Geometry derived from the terminal size and the current composer height. */
@@ -739,6 +750,56 @@ function footer(snapshot: Snapshot, width: number): string {
   return left + ' '.repeat(gap) + right
 }
 
+/**
+ * The fleet overview pane, which replaces the transcript while it is open.
+ *
+ * The rows themselves come from `renderFleet`, so this function only supplies
+ * the chrome the pane needs: a heading, the summary line, scrolling, and the
+ * key hints. Keeping the row rendering in `fleet.ts` is what lets the overview
+ * be tested without a terminal.
+ */
+function fleetPane(snapshot: Snapshot, geometry: Layout): string[] {
+  const width = geometry.contentWidth
+  const height = geometry.viewportRows
+  const fleet = snapshot.fleet
+  if (fleet === undefined) return []
+
+  const head: string[] = [bold('Fleet')]
+  head.push(
+    fleet.loading && fleet.sessions.length === 0
+      ? muted('collecting from every device…')
+      : muted(fleetSummary(fleet.sessions)),
+  )
+  head.push('')
+
+  const body = renderFleet(fleet.sessions, {
+    width,
+    selectedIndex: fleet.sessions.length === 0 ? -1 : fleet.selected,
+    spinner: snapshot.spinner,
+    sources: fleet.sources,
+  })
+
+  // Scroll so the selected row stays visible. The renderer inserts a heading
+  // per device, so the row's index is not its line -- fleetLineOf maps it.
+  const bodyHeight = Math.max(height - head.length - 1, 1)
+  const selectedLine = fleetLineOf(fleet.sessions, fleet.selected)
+  const start = selectedLine >= bodyHeight ? selectedLine - bodyHeight + 1 : 0
+  const visible = body.slice(start, start + bodyHeight)
+
+  const out = [...head, ...visible]
+  while (out.length < height - 1) out.push('')
+
+  const current = fleet.sessions[fleet.selected]
+  // Only a local session can be opened in place; a remote one is reached over
+  // SSH, so the hint promises to copy the command rather than to open it.
+  const action = current === undefined ? 'open' : current.local ? 'enter open' : 'enter copy ssh'
+  const hint = `↑↓ move  ·  ${action}  ·  r refresh  ·  esc back`
+  const count = fleet.loading ? 'refreshing…' : `${String(fleet.sessions.length)} sessions`
+  const pad = Math.max(width - displayWidth(hint) - displayWidth(count), 1)
+  out.push(muted(hint) + ' '.repeat(pad) + muted(count))
+  return out.slice(0, height)
+}
+
 /** Build a full frame plus the cursor position for the screen to place. */
 export function render(snapshot: Snapshot): {
   lines: string[]
@@ -757,7 +818,11 @@ export function render(snapshot: Snapshot): {
 
   if (geometry.viewportRows > 0) {
     const body =
-      snapshot.picker.kind === 'none' ? viewport(snapshot, geometry) : pickerPane(snapshot, geometry)
+      snapshot.fleet?.open === true
+        ? fleetPane(snapshot, geometry)
+        : snapshot.picker.kind === 'none'
+          ? viewport(snapshot, geometry)
+          : pickerPane(snapshot, geometry)
     rows.push(...body)
   }
   if (geometry.showGap) rows.push('')
@@ -777,7 +842,7 @@ export function render(snapshot: Snapshot): {
   // of that box is about to be shifted right by the gutter.
   const lines = rows.map((line) => gutter + line)
   const cursor =
-    snapshot.picker.kind === 'none'
+    snapshot.picker.kind === 'none' && snapshot.fleet?.open !== true
       ? {
           row: composerTop + composer.cursor.row,
           column: composer.cursor.column + gutter.length,
@@ -801,6 +866,7 @@ export const HELP_TEXT = [
   '- `ctrl+o` — expand or collapse tool calls · `ctrl+x` — compact the session',
   '- `ctrl+b` — show what the background agents are doing',
   '- `ctrl+y` — copy the last reply to the clipboard',
+  '- `ctrl+f` — sessions across every device',
   '- `?` — open this help on an empty composer',
   '',
   '**Sessions**',
@@ -810,6 +876,13 @@ export const HELP_TEXT = [
   '- `/close` — close this one · a finished session rings the bell and marks ●',
   '- `ctrl+a` / `ctrl+e` — start / end of line · `ctrl+w` — delete word',
   '- `ctrl+c` — sessions menu · again within 1.5s — quit',
+  '',
+  '**Fleet** (`ctrl+f`, `/fleet`)',
+  '',
+  '- every device that runs this app, grouped by machine',
+  '- `↑` / `↓` or `j` / `k` — move · `r` — refresh · `esc` — back',
+  '- `enter` — open a session here, or copy the `ssh` command that reaches it',
+  '- add devices with `--peer <host>`; each is read over SSH, nothing listens',
   '',
   '**Searching**',
   '',

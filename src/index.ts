@@ -54,6 +54,9 @@ import { transcriptMarkdown } from './tui/export.ts'
 import { deleteStoredSessionDir, findStoredSessionDir } from './sessions-store.ts'
 import { loadState, saveStateSync, type PersistedState } from './persist.ts'
 import { VERSION } from './version.ts'
+import { FleetView, jumpCommand, mergeFleet } from './tui/fleet.ts'
+import { PresencePublisher, type PresenceInput } from './presence.ts'
+import { collectFleet, localDshHome, type PeerConfig } from './fleet-sources.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'dsh-tui-app'
@@ -71,6 +74,11 @@ export interface Config {
   mouse?: boolean
   /** Ring the terminal bell when a session's turn finishes; on by default. */
   bell?: boolean
+  /**
+   * Devices to include in the fleet overview, as anything `ssh` accepts.
+   * Empty means the overview shows only this machine.
+   */
+  peers?: string[]
 }
 
 export const Config: z<Config> = z.object({
@@ -80,6 +88,7 @@ export const Config: z<Config> = z.object({
   contextLimit: z.number(),
   mouse: z.boolean(),
   bell: z.boolean(),
+  peers: z.array(z.string()),
 })
 
 /** Spinner frames for the streaming indicator. */
@@ -111,6 +120,7 @@ const BUILTIN_COMMANDS: readonly PaletteCommand[] = [
   { name: 'find', args: '<text>', description: 'Search the transcript; n and N jump between matches' },
   { name: 'unqueue', args: '', description: 'Discard prompts queued while a reply was streaming' },
   { name: 'copy', args: '', description: 'Copy the last reply to the system clipboard' },
+  { name: 'fleet', args: '', description: 'Sessions across every device (ctrl+f)' },
   { name: 'about', args: '', description: 'Show version and connection information' },
   { name: 'help', args: '', description: 'Show keys and commands' },
   { name: 'exit', args: '', description: 'Quit dsh' },
@@ -227,6 +237,14 @@ class TuiApp {
   private persisted: PersistedState = { inputHistory: [], thinking: false }
   private persistTimer: NodeJS.Timeout | undefined
 
+  /** The cross-device overview, and what this device publishes to it. */
+  private readonly fleet = new FleetView()
+  private readonly presence: PresencePublisher
+  /** Signature of the last published set, so an unchanged paint writes nothing. */
+  private presenceKey = ''
+  /** Working directory the sessions were created in, reported in presence. */
+  private cwd = process.cwd()
+
   private abort: AbortController | undefined
   private disposers: (() => void)[] = []
   private stopped = false
@@ -242,6 +260,7 @@ class TuiApp {
     this.config = config
     this.exit = exit
     this.showThinking = config.thinking === true
+    this.presence = new PresencePublisher(localDshHome())
     this.screen = new Screen({
       onKey: (key) => {
         this.handleKey(key)
@@ -276,6 +295,7 @@ class TuiApp {
 
     const fs = this.ctx.get('fs')
     const cwd = fs === undefined ? process.cwd() : fs.processPath(await fs.resolve('.'))
+    this.cwd = cwd
 
     if (this.config.resumeSessionId !== undefined) {
       const sessionId = brandString<SessionId>(this.config.resumeSessionId)
@@ -294,6 +314,9 @@ class TuiApp {
 
     this.subscribeToStream()
     this.subscribeToAgents()
+    // Publishing is what makes this device visible to every other one.
+    this.presence.start()
+    this.publishPresence()
     void this.refreshContextLimit()
 
     if (!Screen.isInteractive()) {
@@ -327,6 +350,8 @@ class TuiApp {
     this.stopped = true
     this.stopSpinner()
     this.persistNow()
+    // Drop this device's presence records so it does not linger as stale.
+    this.presence.stop()
     for (const dispose of this.disposers) {
       try {
         dispose()
@@ -592,11 +617,15 @@ class TuiApp {
       confirming: this.confirming,
       confirmText: this.confirming ? this.confirmPrompt : undefined,
       searchActive: this.search !== undefined,
+      fleet: this.fleet,
     }
   }
 
   private paint(): void {
     if (this.stopped) return
+    // Paint is the one funnel every state change already goes through, and
+    // publishPresence is a no-op unless the published set actually changed.
+    this.publishPresence()
     const frame = render(this.snapshot())
     this.screen.setCursor(frame.cursor)
     this.screen.paint(frame.lines)
@@ -623,6 +652,136 @@ class TuiApp {
     this.spinnerTimer = undefined
   }
 
+  // ---------------------------------------------------------------- fleet
+
+  /**
+   * Publish what this device is doing, when it has changed.
+   *
+   * Called from every paint, so it must be cheap: the set is reduced to a
+   * signature and nothing is written unless that signature moved. The
+   * publisher's own heartbeat refreshes the timestamps in between, which is
+   * what keeps a quiet device from ageing out as stale.
+   */
+  private publishPresence(): void {
+    const sessions: PresenceInput[] = this.tabs
+      // A tab with no agent has no session id worth publishing yet.
+      .filter((tab) => tab.agent !== undefined)
+      .map((tab) => ({
+        sessionId: tab.id,
+        title: tab.title,
+        status: tab.streaming ? 'running' : tab.status === 'ready' ? 'ready' : 'idle',
+        model: tab.modelName === '' ? undefined : tab.modelName,
+        cwd: this.cwd,
+      }))
+    const key = JSON.stringify(
+      sessions.map((session) => [session.sessionId, session.title, session.status]),
+    )
+    if (key === this.presenceKey) return
+    this.presenceKey = key
+    this.presence.publish(sessions)
+  }
+
+  /** Open the overview and start a collection round. */
+  private openFleet(): void {
+    this.fleet.show()
+    this.picker.hide()
+    this.palette.close()
+    this.setStatus('')
+    this.paint()
+    void this.refreshFleet()
+  }
+
+  /**
+   * Collect from this device and every configured peer.
+   *
+   * The pane is already on screen when this runs, so a slow or unreachable
+   * peer appears as a named error under the list instead of blocking the UI.
+   */
+  private async refreshFleet(): Promise<void> {
+    const peers: PeerConfig[] = (this.config.peers ?? []).map((host) => ({ host }))
+    try {
+      const sources = await collectFleet(peers)
+      // The overview may have been closed while SSH was still running.
+      if (!this.fleet.open) return
+      this.fleet.setResult(mergeFleet(sources, Date.now()), sources)
+    } catch (error) {
+      this.fleet.setResult([], [])
+      this.setStatus(describeError(error), true)
+    }
+    this.paint()
+  }
+
+  private closeFleet(): void {
+    this.fleet.hide()
+    this.setStatus('')
+    this.screen.invalidate()
+    this.paint()
+  }
+
+  /**
+   * Act on the highlighted row.
+   *
+   * A session this app already owns is switched to, which is the point of the
+   * list. Anything else lives in another process -- on this machine or another
+   * one -- and this process has no terminal there. Rather than pretend, the
+   * command that does reach it goes on the clipboard.
+   */
+  private openFleetSelection(): void {
+    const session = this.fleet.current()
+    if (session === undefined) return
+
+    const open = this.tabs.findIndex((tab) => tab.id === session.sessionId)
+    if (session.local && open !== -1) {
+      this.fleet.hide()
+      this.selectSession(open)
+      return
+    }
+
+    const command = jumpCommand(session)
+    const result = this.writeClipboard(command)
+    this.fleet.hide()
+    this.setStatus(result.ok ? `copied: ${command}` : `run: ${command}`)
+    this.screen.invalidate()
+    this.paint()
+  }
+
+  private handleFleetKey(key: Key): void {
+    switch (key.name) {
+      case 'esc':
+      case 'ctrl+c':
+      case 'q':
+        this.closeFleet()
+        break
+
+      case 'up':
+      case 'ctrl+p':
+      case 'k':
+        this.fleet.move(-1)
+        this.paint()
+        break
+
+      case 'down':
+      case 'ctrl+n':
+      case 'j':
+        this.fleet.move(1)
+        this.paint()
+        break
+
+      case 'r':
+        this.fleet.loading = true
+        this.paint()
+        void this.refreshFleet()
+        break
+
+      case 'enter':
+        this.openFleetSelection()
+        break
+
+      default:
+        break
+    }
+  }
+
   // ------------------------------------------------------------ key handling
 
   private handleKey(key: Key): void {
@@ -631,6 +790,10 @@ class TuiApp {
       // navigation, then ctrl+c again should open the menu, not lose the
       // session to a stale confirmation.
       if (key.name !== 'ctrl+c') this.lastQuitRequest = 0
+      if (this.fleet.open) {
+        this.handleFleetKey(key)
+        return
+      }
       if (this.picker.kind !== 'none') {
         this.handlePickerKey(key)
         return
@@ -839,6 +1002,10 @@ class TuiApp {
 
       case 'ctrl+y':
         this.copyLastReply()
+        break
+
+      case 'ctrl+f':
+        this.openFleet()
         break
 
       case 'left':
@@ -1092,7 +1259,23 @@ class TuiApp {
       this.paint()
       return
     }
-    const encoded = Buffer.from(message.content, 'utf8').toString('base64')
+    const result = this.writeClipboard(message.content)
+    if (result.ok) {
+      this.setStatus(`copied the last reply to the clipboard${result.truncated ? ' (truncated)' : ''}`)
+    } else {
+      this.setStatus(`copy failed: ${result.error}`, true)
+    }
+    this.paint()
+  }
+
+  /**
+   * Put text on the system clipboard over OSC 52.
+   *
+   * Shared by `/copy` and the fleet overview, because the escape and its
+   * payload ceiling are the same problem in both places.
+   */
+  private writeClipboard(text: string): { ok: boolean; truncated: boolean; error?: string } {
+    const encoded = Buffer.from(text, 'utf8').toString('base64')
     // Cap the payload on the encoded form, kept a multiple of four so it stays
     // decodable; slicing the content instead would split a surrogate pair and
     // still overshoot the ceiling by base64's 33% expansion.
@@ -1102,12 +1285,10 @@ class TuiApp {
       // `ESC ] 52 ; c ; <base64> ST` — the standard form every mainstream
       // terminal accepts. Written directly, then the next paint redraws.
       process.stdout.write(`\u001b]52;c;${clipped}\u001b\\`)
-      const truncatedNote = encoded.length > cap ? ' (truncated)' : ''
-      this.setStatus(`copied the last reply to the clipboard${truncatedNote}`)
+      return { ok: true, truncated: encoded.length > cap }
     } catch (error) {
-      this.setStatus(`copy failed: ${describeError(error)}`, true)
+      return { ok: false, truncated: false, error: describeError(error) }
     }
-    this.paint()
   }
 
   /**
@@ -1343,6 +1524,10 @@ class TuiApp {
 
       case 'export':
         await this.exportTranscript(rawInput.trim())
+        return
+
+      case 'fleet':
+        this.openFleet()
         return
 
       case 'about':

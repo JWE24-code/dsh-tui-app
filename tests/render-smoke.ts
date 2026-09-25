@@ -373,7 +373,14 @@ const help = assertFrame('help', { ...helpTop, scrollBack: maxScrollBack(helpTop
 check('help overlay renders from the top', help.some((line) => stripAnsi(line).includes('Keys')))
 check(
   'help documents the session keys',
-  render({ ...helpTop, scrollBack: 0 }).lines.some((line) => stripAnsi(line).includes('alt+1')),
+  HELP_TEXT.includes('alt+1'),
+)
+check('help documents the fleet keys', HELP_TEXT.includes('ctrl+f'))
+check(
+  'help scrolled to the bottom ends on the commands section',
+  render({ ...helpTop, scrollBack: 0 }).lines.some((line) =>
+    stripAnsi(line).includes('every command the harness has registered'),
+  ),
 )
 
 const errored = assertFrame('error', snapshot({ status: 'something broke', statusIsError: true }))

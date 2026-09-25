@@ -15,16 +15,21 @@ import { join } from 'node:path'
 
 import {
   DEFAULT_STALE_AFTER_MS,
+  FleetView,
   PRESENCE_VERSION,
+  fleetLineOf,
   fleetSummary,
   formatAge,
   isPresenceRecord,
   jumpCommand,
   mergeFleet,
   renderFleet,
+  type FleetSession,
   type FleetSource,
   type PresenceRecord,
 } from '../src/tui/fleet.ts'
+import { Composer, Palette, Picker } from '../src/tui/state.ts'
+import { render, type Snapshot } from '../src/tui/view.ts'
 import { PresencePublisher, presenceDir, readPresenceDir } from '../src/presence.ts'
 import { stripAnsi, displayWidth } from '../src/tui/text.ts'
 
@@ -242,6 +247,179 @@ try {
 
 // A missing directory reads as empty rather than throwing.
 check('a missing presence dir is empty', readPresenceDir('/nonexistent/dsh/presence').length === 0)
+
+// ------------------------------------------------------- the overview's state
+
+function session(overrides: Partial<FleetSession> = {}): FleetSession {
+  return {
+    host: 'laptop',
+    sessionId: 'session-aaa',
+    title: 'tail docker logs',
+    status: 'idle',
+    updatedAt: NOW,
+    local: false,
+    ageSeconds: 0,
+    ...overrides,
+  }
+}
+
+const view = new FleetView()
+check('the overview starts closed', !view.open)
+view.show()
+check('showing it opens it', view.open)
+check('showing it starts a collection round', view.loading)
+
+const first = [
+  session({ host: 'here', sessionId: 's-1', local: true, status: 'running' }),
+  session({ host: 'here', sessionId: 's-2', local: true }),
+  session({ host: 'there', sessionId: 's-3' }),
+]
+view.setResult(first, [])
+check('a result clears the loading flag', !view.loading)
+check('a result installs the rows', view.sessions.length === 3)
+
+view.move(2)
+check('the cursor moves', view.selected === 2)
+view.move(10)
+check('the cursor stops at the end', view.selected === 2)
+view.move(-99)
+check('the cursor stops at the start', view.selected === 0)
+
+// The cursor must follow the session, not the row number: rows reorder as work
+// starts and finishes, and a refresh that silently moved the selection onto a
+// different machine would be a way to open the wrong thing.
+view.move(2)
+const anchored = view.current()?.sessionId
+const reordered = [first[2], first[0], first[1]].filter((row): row is FleetSession => row !== undefined)
+view.setResult(reordered, [])
+check('the cursor follows its session across a refresh', view.current()?.sessionId === anchored)
+
+// A session that disappeared cannot be followed; the cursor must land somewhere real.
+view.setResult([session({ sessionId: 'brand-new' })], [])
+check('a vanished session drops the cursor to the top', view.selected === 0)
+view.setResult([], [])
+check('an empty result leaves a usable cursor', view.selected === 0 && view.current() === undefined)
+check('moving an empty list is harmless', (() => { view.move(1); return view.selected === 0 })())
+
+view.hide()
+check('hiding closes it', !view.open && !view.loading)
+
+// ------------------------------------------------ line mapping matches render
+
+// fleetLineOf duplicates renderFleet's heading rule, so the two must agree or
+// the pane scrolls to the wrong row.
+const mapped = [
+  session({ host: 'here', sessionId: 'a', local: true }),
+  session({ host: 'here', sessionId: 'b', local: true }),
+  session({ host: 'there', sessionId: 'c' }),
+  session({ host: 'there', sessionId: 'd' }),
+]
+const mappedLines = renderFleet(mapped, { width: 60, selectedIndex: -1 }).map((line) => stripAnsi(line))
+mapped.forEach((row, index) => {
+  const line = mappedLines[fleetLineOf(mapped, index)] ?? ''
+  check(`row ${String(index)} maps to its own rendered line`, line.includes(row.title))
+})
+
+// ----------------------------------------------------------- the pane on screen
+
+function fleetSnapshot(fleet: FleetView, overrides: Partial<Snapshot> = {}): Snapshot {
+  return {
+    columns: 100,
+    rows: 30,
+    title: 'a session',
+    host: 'local harness',
+    modelName: 'deepseek-chat',
+    messages: [],
+    streamingText: '',
+    streamingReasoning: '',
+    streamingTools: [],
+    streaming: false,
+    spinner: '⠋',
+    status: '',
+    statusIsError: false,
+    overlay: '',
+    showThinking: false,
+    composer: new Composer(),
+    palette: new Palette(),
+    picker: new Picker(),
+    scrollBack: 0,
+    expandTools: false,
+    sessions: [],
+    background: [],
+    expandBackground: false,
+    elapsedSeconds: 0,
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0,
+    haveUsage: false,
+    contextLimit: 65536,
+    confirming: false,
+    fleet,
+    ...overrides,
+  }
+}
+
+const pane = new FleetView()
+pane.show()
+pane.setResult(
+  [
+    session({ host: 'here', sessionId: 's-1', title: 'rebuild the index', local: true, status: 'running' }),
+    session({ host: 'there', sessionId: 's-2', title: 'draft the release notes', status: 'ready' }),
+  ],
+  [{ host: 'gone', local: false, records: [], error: 'Connection refused' }],
+)
+const paneFrame = render(fleetSnapshot(pane))
+const paneText = paneFrame.lines.map((line) => stripAnsi(line))
+
+check('the pane is titled', paneText.some((line) => line.includes('Fleet')))
+check('the pane summarises', paneText.some((line) => line.includes('across 2 devices')))
+check('the pane groups by device', paneText.some((line) => line.includes('here  (this device)')))
+check('the pane names the remote device', paneText.some((line) => line.trimStart().startsWith('there')))
+check('the pane lists a local session', paneText.some((line) => line.includes('rebuild the index')))
+check('the pane lists a remote session', paneText.some((line) => line.includes('draft the release notes')))
+check('an unreachable device is named', paneText.some((line) => line.includes('gone: Connection refused')))
+check('the pane offers a refresh', paneText.some((line) => line.includes('r refresh')))
+
+// The transcript must be gone while the overview owns the screen, and the
+// cursor with it -- a blinking composer cursor under a full-screen list is a
+// promise that typing goes somewhere.
+check('the overview replaces the transcript', paneFrame.cursor === undefined)
+check('the frame still fits the window', paneFrame.lines.length <= 30)
+check(
+  'no line exceeds the width',
+  paneFrame.lines.every((line) => displayWidth(line) <= 100),
+)
+
+// Enter's label has to tell the truth: a remote session cannot be opened here.
+pane.selected = 0
+check(
+  'a local row offers to open',
+  render(fleetSnapshot(pane)).lines.map((line) => stripAnsi(line)).some((line) => line.includes('enter open')),
+)
+pane.selected = 1
+check(
+  'a remote row offers the ssh command instead',
+  render(fleetSnapshot(pane)).lines.map((line) => stripAnsi(line)).some((line) => line.includes('enter copy ssh')),
+)
+
+// An empty fleet must still render a usable pane rather than collapsing.
+const emptyPane = new FleetView()
+emptyPane.show()
+emptyPane.setResult([], [])
+const emptyFrame = render(fleetSnapshot(emptyPane))
+check(
+  'an empty fleet says so',
+  emptyFrame.lines.map((line) => stripAnsi(line)).some((line) => line.includes('no sessions on any device')),
+)
+check('an empty fleet still fits', emptyFrame.lines.length <= 30)
+
+// A window barely tall enough must not throw or overflow.
+const tiny = render(fleetSnapshot(pane, { rows: 10, columns: 40 }))
+check('a short window still renders the pane', tiny.lines.length <= 10)
+check(
+  'a short window keeps every line inside the width',
+  tiny.lines.every((line) => displayWidth(line) <= 40),
+)
 
 // eslint-disable-next-line no-console
 console.log(`ok - ${String(checks)} fleet checks passed`)

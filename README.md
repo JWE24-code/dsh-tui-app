@@ -90,6 +90,7 @@ npm run typecheck
 | `--context-limit <n>` | Override the context budget; the default is the model's own capacity |
 | `--mouse` | Report mouse events so the wheel scrolls (costs terminal text selection) |
 | `--no-bell` | Stay silent when a session finishes |
+| `--peer <host>` | Device to include in the fleet overview; repeatable |
 | `--version` | Print the app version and exit |
 
 `DSH_TUI_CONTEXT_LIMIT` sets the same budget; `DSH_TUI_THEME=light\|dark`
@@ -111,6 +112,7 @@ overrides background detection; `NO_COLOR` disables styling.
 | `ctrl+x` | Compact the session |
 | `ctrl+b` | Expand or collapse the background-agent strip |
 | `ctrl+y` | Copy the last reply to the clipboard |
+| `ctrl+f` | Fleet overview: sessions across every device |
 | `n` / `N` | With a search open and an empty composer, next / previous match |
 | `alt+1`…`alt+9` | Jump to a session · `alt+n`/`alt+p` cycle · `tab` cycles too |
 | `ctrl+a`/`ctrl+e`/`home`/`end`, `ctrl+w`, `ctrl+k` | Line start/end, delete word, kill to end |
@@ -176,6 +178,47 @@ the next launch. The model choice is saved through the Harness's own
 `saveSelection`, not this file. Writing is atomic and best-effort: a read-only
 home means the app runs exactly as before, just without recall across
 restarts.
+
+## One list of every device
+
+```sh
+dsh --profile tui --peer laptop --peer workstation
+```
+
+`ctrl+f` (or `/fleet`) shows every dsh session across every device, grouped by
+machine, most urgent first, with a status mark and the age of each heartbeat.
+
+```
+ Fleet
+ 2 running, 1 ready across 2 devices
+
+ workstation  (this device)
+  ⠹ rebuild the search index   deepseek-chat                            3s
+  · draft the release notes    deepseek-chat                           12m
+
+ laptop
+  ● summarise yesterday        glm-4.7                                  8s
+
+ ↑↓ move  ·  enter open  ·  r refresh  ·  esc back            3 sessions
+```
+
+Each device writes one small JSON record per open session under
+`$DSH_HOME/tui-presence/`, refreshed on a heartbeat and deleted on exit. Peers
+are read with a single non-interactive `ssh` command, so **nothing new listens
+on a port and no credential is added** — SSH is already the boundary. A record
+that stops being refreshed reads as `stale` rather than claiming forever that
+it is running.
+
+`enter` opens the session when this app already owns it. It cannot open
+anything else — another process has no terminal here — so instead it copies the
+command that does reach it:
+
+```sh
+ssh -t laptop 'dsh --profile tui --resume session-…'
+```
+
+See [docs/fleet-overview.md](docs/fleet-overview.md) for why presence files
+rather than the session store.
 
 ## Reaching it from another device
 

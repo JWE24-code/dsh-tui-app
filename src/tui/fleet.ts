@@ -281,3 +281,88 @@ export function fleetSummary(sessions: readonly FleetSession[]): string {
 
 /** Colors re-exported so a caller can match the overview's palette. */
 export const FLEET_COLORS = { colGreen, colGold, colMuted, colText, ok } as const
+
+/**
+ * Which rendered line carries row `index`.
+ *
+ * {@link renderFleet} inserts a heading per device and a blank line between
+ * groups, so the selected row's index is not its line. The pane needs the
+ * line to scroll, and duplicating the rule here rather than returning it from
+ * the renderer keeps the renderer a plain function of its inputs. The two must
+ * agree, which is what the smoke test pins.
+ */
+export function fleetLineOf(sessions: readonly FleetSession[], index: number): number {
+  let line = 0
+  let host = ''
+  for (const [position, session] of sessions.entries()) {
+    if (session.host !== host) {
+      host = session.host
+      // Mirrors renderFleet: a separator before every group but the first.
+      if (line > 0) line += 1
+      line += 1
+    }
+    if (position === index) return line
+    line += 1
+  }
+  return 0
+}
+
+/**
+ * The overview's interaction state: what was collected, and where the cursor is.
+ *
+ * Kept beside the renderer because it is the same concern and equally pure —
+ * it never reads a file or a socket. The app owns collection and hands the
+ * result here.
+ */
+export class FleetView {
+  open = false
+  /** True while a collection round is in flight, so the pane can say so. */
+  loading = false
+  sessions: FleetSession[] = []
+  sources: FleetSource[] = []
+  selected = 0
+
+  show(): void {
+    this.open = true
+    this.loading = true
+  }
+
+  hide(): void {
+    this.open = false
+    this.loading = false
+  }
+
+  /**
+   * Install a freshly collected round.
+   *
+   * The cursor follows the session it was on rather than the position it was
+   * at: rows reorder as work starts and finishes, and a refresh that moved the
+   * selection onto a different machine would be a way to open the wrong thing.
+   */
+  setResult(sessions: readonly FleetSession[], sources: readonly FleetSource[]): void {
+    const anchor = this.current()?.sessionId
+    this.loading = false
+    this.sessions = [...sessions]
+    this.sources = [...sources]
+    if (anchor !== undefined) {
+      const found = this.sessions.findIndex((session) => session.sessionId === anchor)
+      this.selected = found === -1 ? 0 : found
+    }
+    this.clamp()
+  }
+
+  move(delta: number): void {
+    if (this.sessions.length === 0) return
+    this.selected += delta
+    this.clamp()
+  }
+
+  current(): FleetSession | undefined {
+    return this.sessions[this.selected]
+  }
+
+  private clamp(): void {
+    const last = this.sessions.length - 1
+    this.selected = last < 0 ? 0 : Math.min(Math.max(this.selected, 0), last)
+  }
+}

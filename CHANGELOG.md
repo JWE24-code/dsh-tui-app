@@ -8,6 +8,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Fleet overview** — `ctrl+f` or `/fleet` lists every dsh session across every
+  device in one place, grouped by machine and ranked by urgency, with a live
+  status mark and the age of each heartbeat. Each device publishes one small
+  JSON record per open session under `$DSH_HOME/tui-presence/` and peers are
+  read over SSH (`--peer <host>`, repeatable), so nothing new listens on a port
+  and no credential is added. `enter` opens a session this app owns and copies
+  the `ssh … --resume` command for anything it does not; records are deleted on
+  exit so a closed device does not linger as stale.
+
 - **Message queueing** — enter while a reply streams queues the prompt instead
   of rejecting it: queued prompts render as dimmed user turns under the
   streaming block, send themselves in order when the turn finishes without an

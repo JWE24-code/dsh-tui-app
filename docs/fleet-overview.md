@@ -77,13 +77,37 @@ no auth.
 | `tests/fleet-smoke.ts` | 54 assertions over the pure logic plus a real presence round trip. |
 | `tests/fleet-live.ts` | Manual check against real hosts. |
 
+## Using it
+
+Press `ctrl+f`, or type `/fleet`. The list groups by device, most urgent first
+within each one, and refreshes with `r`.
+
+`enter` opens the highlighted session when this app already owns it. It cannot
+open anything else: a session in another process — on this machine or another
+one — has no terminal here. Rather than pretend, the command that does reach it
+goes on the clipboard:
+
+```sh
+ssh -t <host> 'dsh --profile tui --resume <session-id>'
+```
+
+Add devices with a repeatable flag:
+
+```sh
+dsh --profile tui --peer laptop --peer workstation
+```
+
+Each peer is read with one short, non-interactive SSH command. Nothing is
+installed there beyond `dsh` itself, and nothing listens anywhere.
+
 ## Status of this work
 
-Prototype. The collector and the renderer are verified end to end against a
-real peer; what is **not** wired yet is the TUI calling `PresencePublisher`
-as sessions change, and a picker bound to a key. Those belong on top of the
-local multi-session work, which owns the session records this would publish.
+Wired and verified end to end. A live run under a pseudo-terminal was checked
+against the real app: a record appears in `$DSH_HOME/tui-presence/` while a
+session is open, `ctrl+f` renders the device's own session grouped under its
+hostname, and the record is removed again when the process is told to stop —
+so a device that exits does not linger in anyone else's list as stale.
 
-Also worth knowing: until a second device actually runs `dsh`, the overview
+Worth knowing: until a second device actually runs `dsh`, the overview
 correctly shows a single device — worth remembering when the list looks
 emptier than expected.
