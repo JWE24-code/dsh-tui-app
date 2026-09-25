@@ -17,7 +17,7 @@
  * Nothing here takes effect until the app is restarted: the bundle sets
  * `patchReload: "startup"`, so a layer list edited under a running terminal is
  * read at the next launch and not before.
- * @module moqi/plugins
+ * @module moqi-tui/plugins
  */
 
 import { execFile } from 'node:child_process'
@@ -28,14 +28,16 @@ import { join } from 'node:path'
 export const BASE_BUNDLE = '@deepseek-ai/dsh-base'
 
 /** This app's own package, as the profile's dependency list spells it. */
-export const APP_PACKAGE = 'moqi'
+export const APP_PACKAGE = 'moqi-tui'
 
 /**
- * The name this package shipped under before the scoped rename.
+ * The identifier this package used immediately before `moqi-tui`.
  *
- * Profiles installed then still list it, and the app must keep recognizing its
- * own bundle as protected — otherwise the pane offers to disable the terminal
- * it is running inside.
+ * A profile installed under the old name still lists it, and the app has to
+ * keep recognizing its own bundle as protected — otherwise the plugin pane
+ * offers to disable the terminal it is running inside. npm rejected the bare
+ * `moqi` as too close to existing packages, so the published name grew a
+ * suffix while the command stayed `moqi`.
  */
 export const LEGACY_APP_PACKAGE = 'moqi'
 

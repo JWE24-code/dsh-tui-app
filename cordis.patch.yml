@@ -17,10 +17,10 @@
 
 - insert:
     - id: tui-startup
-      name: 'moqi/startup'
+      name: 'moqi-tui/startup'
 
     - id: tui-app
-      name: 'moqi'
+      name: 'moqi-tui'
       inject: [tuiStartup]
       config:
         resumeSessionId: !!js ctx.tuiStartup.resumeSessionId

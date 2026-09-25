@@ -51,12 +51,12 @@ From npm — one command, then the launcher installs the profile and hands the
 terminal to dsh:
 
 ```sh
-npm install -g moqi
+npm install -g moqi-tui
 moqi
 ```
 
 `moqi install` only refreshes the profile, and
-`dsh plugin --profile tui add moqi` works too. `/update`
+`dsh plugin --profile tui add moqi-tui` works too. `/update`
 inside the app checks npm and upgrades the global install.
 
 The installer also links the installed Harness's own `@deepseek-ai` packages
@@ -92,7 +92,7 @@ $DSH_HOME/profiles/tui/         # $DSH_HOME defaults to ~/.dsh
 with the bundle order the profile composes:
 
 ```json
-"dsh": { "profile": { "bundles": ["@deepseek-ai/dsh-base", "moqi"] } }
+"dsh": { "profile": { "bundles": ["@deepseek-ai/dsh-base", "moqi-tui"] } }
 ```
 
 Pass a name to install under a different profile: `npm run install-profile -- chat`.
@@ -667,7 +667,7 @@ src/
 `src/tui/` imports nothing from the Harness and nothing from npm, which is why
 it can be tested without a profile. `src/tui-host.ts` is the one module that
 does import Cordis, because it *is* the seam (exported as
-`moqi/tui-host`); the shortcut registry and status line it
+`moqi-tui/tui-host`); the shortcut registry and status line it
 delegates to are plain classes in `src/tui-host-core.ts`, which the suites
 import instead, so both are tested without a context — and re-exported from the
 seam, so a plugin still needs the one import.
