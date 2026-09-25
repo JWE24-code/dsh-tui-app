@@ -199,6 +199,22 @@ export function restorePlan(
 }
 
 /**
+ * A scratch path for the write-then-rename, unique to this process.
+ *
+ * The rename is what makes a save atomic, but the file it renames has to be
+ * this process's alone. Several sessions of this app run at once -- that is
+ * the point of the fleet -- and when two of them saved at the same moment they
+ * wrote the same `tui-state.json.tmp` on top of each other and renamed the
+ * interleaved result into place. The file that came out was one complete
+ * document followed by a fragment of another, which every later read then
+ * discarded as unparseable, silently losing the remembered sessions, peers and
+ * theme. Observed, not hypothetical.
+ */
+export function scratchPath(target: string): string {
+  return `${target}.${String(process.pid)}.tmp`
+}
+
+/**
  * Write the state atomically: a temporary file in the same directory, then a
  * rename, so a crash mid-write can never leave a half-written JSON behind.
  */
@@ -207,7 +223,7 @@ export async function saveState(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<void> {
   const target = statePath(env)
-  const temporary = `${target}.tmp`
+  const temporary = scratchPath(target)
   const payload = JSON.stringify({ ...state, version: STATE_VERSION })
   try {
     await mkdir(dirname(target), { recursive: true })
@@ -225,7 +241,7 @@ export async function saveState(
  */
 export function saveStateSync(state: PersistedState, env: NodeJS.ProcessEnv = process.env): void {
   const target = statePath(env)
-  const temporary = `${target}.tmp`
+  const temporary = scratchPath(target)
   const payload = JSON.stringify({ ...state, version: STATE_VERSION })
   try {
     mkdirSync(dirname(target), { recursive: true })

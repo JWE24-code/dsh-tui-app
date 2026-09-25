@@ -15,6 +15,7 @@
 
 import assert from 'node:assert/strict'
 import { mkdtemp, readdir, rm } from 'node:fs/promises'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
@@ -25,6 +26,8 @@ import {
   MAX_RESTORED_SESSIONS,
   restorePlan,
   saveState,
+  saveStateSync,
+  scratchPath,
   statePath,
   type PersistedSession,
   type PersistedState,
@@ -243,6 +246,46 @@ try {
   check('peers absent entirely is not fatal', decodeState(
     JSON.stringify({ inputHistory: [], thinking: false, sessions: [], activeSession: 0, version: VERSION }),
   ).peers.length === 0)
+}
+
+// ------------------------------------------------- concurrent saves are safe
+
+// Several sessions of this app run at once, and when two saved at the same
+// moment they wrote the same tui-state.json.tmp on top of each other and
+// renamed the interleaved result into place. The file that came out was one
+// complete document followed by a fragment of another, and every later read
+// discarded it, silently losing the remembered sessions, peers and theme.
+// Observed on a real machine, so it is pinned here.
+{
+  const home = mkdtempSync(join(tmpdir(), 'dsh-persist-race-'))
+  const env = { DSH_HOME: home } as NodeJS.ProcessEnv
+
+  saveStateSync(state({ peers: ['one'] }), env)
+  const written = readFileSync(statePath(env), 'utf8')
+  check('a save leaves parseable JSON', decodeState(written).peers.join(',') === 'one')
+
+  check('the rename leaves no scratch file behind', readdirSync(home).every((n) => !n.endsWith('.tmp')))
+
+  // The property that actually prevents the corruption: the scratch path is
+  // this process's alone. The old code used `${target}.tmp` for everybody,
+  // which is what let two writers land in the same file. Asserting on the
+  // directory after a save cannot see this -- the rename removes the evidence
+  // either way -- so assert on the path itself.
+  const scratch = scratchPath(statePath(env))
+  check('the scratch path is not the bare .tmp every process would share', scratch !== `${statePath(env)}.tmp`)
+  check('the scratch path carries this process id', scratch.includes(String(process.pid)))
+  check('the scratch path still sits beside the target', scratch.startsWith(statePath(env)))
+
+  // Whatever a second writer leaves lying around must not affect a read.
+  writeFileSync(join(home, 'tui-state.json.99999.tmp'), 'half a document {', 'utf8')
+  check('a foreign scratch file is ignored', decodeState(readFileSync(statePath(env), 'utf8')).peers.join(',') === 'one')
+
+  // And the shape the bug produced must still decode to the fallback rather
+  // than throwing, which is what kept the app usable while this went unnoticed.
+  const doubled = `${written}${written}`
+  check('a doubled document degrades to the fallback', decodeState(doubled).sessions.length === 0)
+
+  rmSync(home, { recursive: true, force: true })
 }
 
 // eslint-disable-next-line no-console
