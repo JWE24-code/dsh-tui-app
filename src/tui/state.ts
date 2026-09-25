@@ -104,6 +104,7 @@ export type PickerKind =
   | 'plugins'
   | 'open'
   | 'delete'
+  | 'rewind'
   | 'none'
 
 /** One row in the picker. */

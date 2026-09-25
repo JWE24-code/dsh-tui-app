@@ -1068,7 +1068,7 @@ export const HELP_TEXT = [
   '**Sessions**',
   '',
   '- `ctrl+n` — new session · `alt+1`…`alt+9` jump · `tab` on empty cycles · `/sessions` picks',
-  '- `/close` — close · `/rename <title>` — name it · done rings the bell ●',
+  '- `/close` · `/rename <t>` · `/rewind` redo a prompt · `/fork` twin · `/tree` lineage',
   '- `ctrl+a` / `ctrl+e` — start / end of line · `ctrl+w` — delete word · `ctrl+d` — delete forward',
   '',
   '**Fleet** (`ctrl+f`, `/fleet`) — every device running this app, by machine',

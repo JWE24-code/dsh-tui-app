@@ -428,6 +428,21 @@ The choice is saved with the rest of the durable state and applied before the
 first frame, so it survives a restart. Switching repaints the whole screen at
 once, since a palette change moves the color of nearly every cell.
 
+## Rewinding and forking
+
+`/rewind` lists every prompt in the conversation; picking one forks the session
+at the start of that prompt's turn, restores the prompt into the composer, and
+opens the fork beside the original. The original is untouched, so trying a
+different wording costs nothing — and the first prompt cannot be rewound past,
+because there would be nothing left to inherit.
+
+`/fork` copies the whole conversation into a resumable twin, cut at the last
+completed turn so the seed is always a balanced prefix. `/tree` shows the
+family: the lineage of forks this session belongs to, oldest ancestor first.
+
+Forks are real Harness sessions (`parentSession` plus a seeded prefix), so they
+appear in `/resume`, survive restarts, and can themselves be rewound or forked.
+
 ## When the agent stops to ask
 
 Three moments hand the keyboard to a panel in place of the transcript, and all

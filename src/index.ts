@@ -27,7 +27,7 @@ import type {
 } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
-import { SessionSeq } from '@deepseek-ai/dsh-session'
+import { SessionLogOffset, SessionSeq } from '@deepseek-ai/dsh-session'
 import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-cmdline'
@@ -62,6 +62,7 @@ import {
   type AtMatch,
 } from './tui/atfile.ts'
 import { FileIndex } from './file-index.ts'
+import { forkCut, lineage, projectUserTurns, rewindTarget } from './rewind.ts'
 import { ApprovalPanel, QuestionsPanel, type ApprovalDecision } from './tui/panels.ts'
 import { UserQuestionError } from '@deepseek-ai/dsh-user-questions'
 import type { AskUserQuestionAnswer, AskUserQuestionRequest } from '@deepseek-ai/dsh-user-questions'
@@ -206,6 +207,13 @@ const BUILTIN_COMMANDS: readonly PaletteCommand[] = [
     description: 'Stop the streaming reply and run the queued prompts now',
   },
   { name: 'copy', args: '', description: 'Copy the last reply to the system clipboard' },
+  {
+    name: 'rewind',
+    args: '',
+    description: 'Redo an earlier prompt in a forked session that keeps the history before it',
+  },
+  { name: 'fork', args: '', description: 'Copy this session into a resumable twin' },
+  { name: 'tree', args: '', description: 'Show this session’s family tree of forks' },
   { name: 'fleet', args: '', description: 'Sessions across every device (ctrl+f)' },
   { name: 'peer', args: '[add|rm <host>]', description: 'Devices the fleet overview reads' },
   { name: 'about', args: '', description: 'Show version and connection information' },
@@ -1712,6 +1720,7 @@ class TuiApp {
         }
         else if (kind === 'plugins') this.togglePlugin(item.id)
         else if (kind === 'delete') this.confirmDelete(item.id, item.title)
+        else if (kind === 'rewind') void this.performRewind(Number.parseInt(item.id, 10))
         else void this.openSession(item.id, item.title)
         break
       }
@@ -2847,6 +2856,18 @@ class TuiApp {
         return
       }
 
+      case 'rewind':
+        this.showRewind()
+        return
+
+      case 'fork':
+        void this.performFork()
+        return
+
+      case 'tree':
+        void this.showTree()
+        return
+
       case 'interrupt': {
         // Two ways to stop a reply. `esc` is a bid for silence: the queue
         // freezes until the user sends again. `/interrupt` is a redirection:
@@ -3028,6 +3049,187 @@ class TuiApp {
       this.setStatus(describeError(error), true)
     }
     this.paint()
+  }
+
+  /**
+   * `/rewind` — pick an earlier prompt, then redo it in a forked session.
+   *
+   * The fork keeps every completed turn before that prompt, and the prompt
+   * itself returns to the composer for editing: the original session is never
+   * touched, so nothing is lost by trying a different direction.
+   */
+  private showRewind(): void {
+    const session = this.tab.agent?.session
+    if (session === undefined) {
+      this.setStatus('no session to rewind', true)
+      this.paint()
+      return
+    }
+    const turns = projectUserTurns(sessionEvents(session))
+    const items: PickerItem[] = []
+    turns.forEach((turn, index) => {
+      const first = turn.text.split('\n')[0] ?? ''
+      items.push({
+        id: String(index),
+        title: first.length > 60 ? `${first.slice(0, 59)}…` : first,
+        subtitle:
+          index === 0
+            ? 'first prompt — cannot rewind past it'
+            : `${String(index + 1)} of ${String(turns.length)}`,
+      })
+    })
+    if (items.length === 0) {
+      this.setStatus('nothing to rewind yet')
+      this.paint()
+      return
+    }
+    this.picker.show('rewind', 'Rewind to a prompt', items)
+    this.setStatus('enter forks the session at that point · esc cancels')
+    this.paint()
+  }
+
+  /** Fork at the chosen prompt's turn boundary and restore it to the composer. */
+  private async performRewind(chosenIndex: number): Promise<void> {
+    const session = this.tab.agent?.session
+    if (session === undefined) return
+    const target = rewindTarget(projectUserTurns(sessionEvents(session)), chosenIndex)
+    if (target === undefined) {
+      this.setStatus('cannot rewind past the first prompt — /fork copies the whole conversation')
+      this.paint()
+      return
+    }
+    await this.interruptAndSettle()
+    const forked = await this.forkAt(target.cutSeq)
+    if (forked === undefined) return
+    this.composer.setValue(target.text)
+    this.history.reset()
+    this.setStatus(`rewound — edit the prompt and press enter (${String(target.cutSeq)} events kept)`)
+    this.paint()
+  }
+
+  /** `/fork` — copy the whole conversation into a twin. */
+  private async performFork(): Promise<void> {
+    const session = this.tab.agent?.session
+    if (session === undefined) return
+    const cut = forkCut(sessionEvents(session), session.seq)
+    if (cut === 0) {
+      this.setStatus('nothing to fork yet — send a prompt first')
+      this.paint()
+      return
+    }
+    await this.interruptAndSettle()
+    const forked = await this.forkAt(cut)
+    if (forked !== undefined) {
+      this.setStatus(`forked — ${String(cut)} events inherited, the original is untouched`)
+      this.paint()
+    }
+  }
+
+  /**
+   * Create a new session seeded with the current log's first `cut` events.
+   *
+   * The Harness validates the seed at its own boundary: a prefix that ends
+   * mid-turn or carries a dangling tool call is rejected there, which is why
+   * the callers compute turn boundaries rather than guessing.
+   */
+  private async forkAt(cut: number): Promise<SessionTab | undefined> {
+    const agents = this.ctx.get('agents')
+    const session = this.tab.agent?.session
+    if (agents === undefined || session === undefined) return undefined
+    const seed = session.snapshotEvents(SessionLogOffset(0), SessionLogOffset(cut))
+    const carried = this.tab.selection.current
+    const sessionId = brandString<SessionId>(`session-${randomUUID()}`)
+    const tab = newTab(String(sessionId))
+    if (carried !== undefined) {
+      tab.selection.current = carried
+      tab.modelName = String(carried.model)
+    }
+    try {
+      const created = await agents.create({
+        sessionId,
+        meta: { cwd: this.cwd, parentSession: session.header.id, isSeeded: true },
+        inheritedEventCount: SessionLogOffset(cut),
+        seed,
+        agentOptions:
+          carried === undefined
+            ? undefined
+            : { provider: carried.provider, model: carried.model },
+        setup: this.selectionSetupFor(tab),
+      })
+      tab.agent = created.agent
+      this.adoptForeground(tab)
+      this.tabs.push(tab)
+      this.active = this.tabs.length - 1
+      tab.messages = readHistory(created.agent.session)
+      this.persistSoon()
+      this.overlay = ''
+      this.screen.invalidate()
+      void this.refreshContextLimit(tab)
+      return tab
+    } catch (error) {
+      this.setStatus(`fork failed: ${describeError(error)}`, true)
+      this.paint()
+      return undefined
+    }
+  }
+
+  /** `/tree` — the fork family this session belongs to, oldest first. */
+  private async showTree(): Promise<void> {
+    const open = this.tabs
+      .filter((tab) => tab.agent !== undefined)
+      .map((tab) => ({ id: tab.id, title: tab.title, parentSession: parentOf(tab.agent?.session) }))
+    const query = this.ctx.get('sessionQuery') as SessionQueryLike | undefined
+    let stored: { id: string; title?: string; parentSession?: string }[] = []
+    if (query !== undefined) {
+      try {
+        stored = (await listSessionsWithParents(query)).map((row) => ({
+          id: row.id,
+          title: row.title,
+          parentSession: row.parentSession,
+        }))
+      } catch {
+        stored = []
+      }
+    }
+    const known = [...open, ...stored]
+    const path = lineage(known, this.tab.id)
+    const lines = path.map((node, index) => {
+      const title = node.title === undefined || node.title === '' ? node.id : node.title
+      const mark = node.id === this.tab.id ? '●' : '○'
+      return `${'  '.repeat(index)}${mark} ${title}`
+    })
+    const children = known.filter((node) => node.parentSession === this.tab.id)
+    this.showOverlay(
+      [
+        '**Session tree**',
+        '',
+        ...(lines.length > 0 ? lines : ['(no lineage recorded)']),
+        '',
+        children.length === 0
+          ? 'No forks of this session yet — `/rewind` or `/fork` creates one.'
+          : `Forks of this session: ${String(children.length)}`,
+      ].join('\n'),
+      'esc to close',
+    )
+  }
+
+  /**
+   * Stop a running turn and wait for it to settle, capped, before forking.
+   *
+   * A fork that lands while the loop is still appending would inherit a
+   * half-finished turn; the cap keeps an unresponsive turn from hanging the
+   * command forever.
+   */
+  private async interruptAndSettle(): Promise<void> {
+    const tab = this.tab
+    if (!tab.streaming) return
+    this.setStatus('stopping the running reply…')
+    this.paint()
+    this.interrupt()
+    await Promise.race([
+      tab.agent?.whenIdle() ?? Promise.resolve(),
+      new Promise((resolve) => setTimeout(resolve, 30_000)),
+    ])
   }
 
   /**
@@ -3571,6 +3773,50 @@ function readHistory(session: Session): Message[] {
     else if (event.type === 'user/message') out.push({ role: 'user', content: text })
   }
   return out
+}
+
+/**
+ * The session log as the rewind/fork rules want it: every event with the seq
+ * that indexes it, since a log is contiguous from 0.
+ */
+function sessionEvents(session: Session): { seq: number; type: string }[] {
+  return session
+    .snapshotEvents(SessionLogOffset(0), session.seq)
+    .map((event, seq) => ({ seq, type: String((event as { type?: unknown }).type ?? '') }))
+}
+
+/** A session's fork parent, when its header records one. */
+function parentOf(session: Session | undefined): string | undefined {
+  const parent = session?.header.parentSession
+  return parent === undefined ? undefined : String(parent)
+}
+
+/**
+ * Session rows with their fork parent, for `/tree`.
+ *
+ * The query service's row shape is probed rather than assumed: an rc that
+ * names the field differently still yields a tree, just without lineage.
+ */
+async function listSessionsWithParents(
+  query: SessionQueryLike,
+): Promise<{ id: string; title?: string; parentSession?: string }[]> {
+  const method = query.listSessions ?? query.list ?? query.querySessions
+  if (method === undefined) return []
+  const raw = await method.call(query, {})
+  const rows = Array.isArray(raw)
+    ? raw
+    : Array.isArray((raw as { items?: unknown[] })?.items)
+      ? (raw as { items: unknown[] }).items
+      : []
+  return rows.slice(0, 500).map((row) => {
+    const record = row as Record<string, unknown>
+    const parent = record['parentSession'] ?? record['parent']
+    return {
+      id: String(record['sessionId'] ?? record['id'] ?? ''),
+      title: typeof record['title'] === 'string' ? record['title'] : undefined,
+      parentSession: parent === undefined || parent === null ? undefined : String(parent),
+    }
+  }).filter((row) => row.id !== '')
 }
 
 /**
