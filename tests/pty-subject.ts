@@ -23,8 +23,31 @@
 import { Screen } from '../src/tui/screen.ts'
 import { Composer, Palette, Picker, type Message } from '../src/tui/state.ts'
 import { render, type Snapshot } from '../src/tui/view.ts'
+import { AtMenu, activeAtToken, acceptToken, filterFiles } from '../src/tui/atfile.ts'
+import { ApprovalPanel, QuestionsPanel } from '../src/tui/panels.ts'
+import { setLanguage } from '../src/tui/i18n.ts'
 
 const composer = new Composer()
+/** The same trust-surface state the real app keeps, in miniature. */
+let panel: ApprovalPanel | QuestionsPanel | undefined
+const atMenu = new AtMenu()
+const CANDIDATES = ['src/tui/state.ts', 'src/tui/view.ts', 'src/index.ts', 'README.md']
+/** Notices the transcript records for the driver to assert on. */
+const notices: string[] = []
+
+function syncAtMenu(): void {
+  const token = activeAtToken(composer.value(), composer.position())
+  atMenu.update(token, token === undefined ? [] : filterFiles(token.query, CANDIDATES), undefined)
+}
+
+function acceptAt(): void {
+  const chosen = atMenu.current?.()
+  const token = activeAtToken(composer.value(), composer.position())
+  if (chosen === undefined || token === undefined) return
+  const edit = acceptToken(composer.value(), composer.position(), token, chosen.path)
+  composer.adopt(edit.text, edit.cursor)
+  atMenu.close()
+}
 // Mutable on purpose: the loop pushes a user turn on every enter, and
 // Snapshot's readonly Message[] accepts a plain array.
 const messages: Message[] = []
@@ -61,6 +84,8 @@ function snapshot(): Snapshot {
     haveUsage: true,
     contextLimit: 65536,
     confirming: false,
+    atMenu,
+    panel: panel?.view(),
   }
 }
 
@@ -84,8 +109,98 @@ const screen = new Screen({
       lastCtrlC = now
       return
     }
+    if (panel !== undefined) {
+      if (panel instanceof ApprovalPanel) {
+        if (key.name === '1') {
+          notices.push(`allowed ${panel.toolName} once`)
+          panel = undefined
+          repaint()
+          return
+        }
+        if (key.name === '2' || key.name === 'esc') {
+          notices.push(`denied ${panel.toolName}`)
+          panel = undefined
+          repaint()
+          return
+        }
+        panel.move(key.name === 'up' ? -1 : key.name === 'down' ? 1 : 0)
+        repaint()
+        return
+      }
+      if (key.name === ' ' || key.text === ' ') {
+        panel.toggle()
+        repaint()
+        return
+      }
+      if (key.name === 'enter') {
+        const state = panel.advance()
+        if (state === 'done') {
+          const answer = panel.answers()[0]
+          notices.push(`answered ${answer?.selected.join(',') ?? ''}`)
+          panel = undefined
+        }
+        repaint()
+        return
+      }
+      if (key.name === 'esc') {
+        notices.push('cancelled the question')
+        panel = undefined
+        repaint()
+        return
+      }
+      return
+    }
+    if (key.name === 'tab' && atMenu.open) {
+      acceptAt()
+      repaint()
+      return
+    }
+    if (key.name === 'esc') {
+      if (atMenu.open) {
+        atMenu.close()
+        repaint()
+      }
+      return
+    }
     if (key.name === 'enter') {
       const text = composer.value()
+      if (atMenu.open) {
+        acceptAt()
+        repaint()
+        return
+      }
+      if (text === '/ask') {
+        panel = new ApprovalPanel('shell', 'the command writes outside the workspace', 'rm -rf build')
+        composer.reset()
+        repaint()
+        return
+      }
+      if (text === '/question') {
+        panel = new QuestionsPanel([
+          {
+            id: 'q1',
+            question: 'Which tests?',
+            multiSelect: true,
+            options: [{ label: 'unit' }, { label: 'pty' }, { label: 'fleet' }],
+          },
+        ])
+        composer.reset()
+        repaint()
+        return
+      }
+      if (text === '/clear') {
+        messages.length = 0
+        composer.reset()
+        repaint()
+        return
+      }
+      if (text === '/lang') {
+        setLanguage('zh-CN')
+        notices.push('language zh-CN')
+        composer.reset()
+        repaint()
+        return
+      }
       if (text !== '') {
         messages.push({ role: 'user', content: text })
         composer.reset()
@@ -103,8 +218,15 @@ const screen = new Screen({
       repaint()
       return
     }
+    if (key.name === 'ctrl+u') {
+      composer.reset()
+      atMenu.close()
+      repaint()
+      return
+    }
     if (key.text !== '') {
       composer.insert(key.text)
+      syncAtMenu()
       repaint()
     }
   },
@@ -118,7 +240,7 @@ repaint()
 
 function finish(): void {
   screen.stop()
-  const line = `\nSUBJECT-DONE ${String(messages.length)}\n`
+  const line = `\nSUBJECT-DONE ${String(messages.length)} ${notices.join(' | ')}\n`
   process.stdout.write(line, () => {
     process.exit(0)
   })

@@ -760,7 +760,9 @@ class TuiApp {
       case 'ctrl+n':
         panel.move(1)
         break
-      case 'space':
+      // The decoder reports space as printable text, not as a named key, so
+      // the multi-select toggle has to match what actually arrives.
+      case ' ':
         panel.toggle()
         break
       case 'tab':

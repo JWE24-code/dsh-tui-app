@@ -156,6 +156,64 @@ async function main(): Promise<void> {
         stripAnsi(output.slice(beforeEnter)).includes('hello world'),
     )
 
+    // (g) the @ file menu opens on a token and tab accepts a path.
+    write('@st')
+    check(
+      'the @ menu lists a candidate',
+      await until((t) => stripAnsi(t.slice(beforeEnter)).includes('src/tui/state.ts')),
+    )
+    write('\t')
+    check(
+      'tab accepts the completion into the composer',
+      await until((t) => stripAnsi(t.slice(beforeEnter)).includes('src/tui/state.ts ')),
+    )
+    write('\x15') // ctrl+u clears the composer
+    await sleep(150)
+
+    // (h) an approval panel owns the keyboard and 1 allows once.
+    const beforeApproval = output.length
+    write('/ask\r')
+    check(
+      'the approval panel names the tool',
+      await until((t) => stripAnsi(t.slice(beforeApproval)).includes('Allow shell?')),
+    )
+    check(
+      'the approval panel shows the command',
+      stripAnsi(output.slice(beforeApproval)).includes('rm -rf build'),
+    )
+    write('1')
+    check('the approval settles without crashing the subject', alive())
+    await sleep(200)
+
+    // (i) a questionnaire takes a multi-select answer with space and enter.
+    const beforeQuestion = output.length
+    write('/question\r')
+    check(
+      'the question panel shows its options',
+      await until((t) => stripAnsi(t.slice(beforeQuestion)).includes('Which tests?')),
+    )
+    write(' ')
+    check('space toggles an option', await until(() => true))
+    write('\r')
+    await sleep(200)
+
+    // (j) /lang switches the interface language in a real frame. The welcome
+    // is used as the witness because it is drawn in every language and is not
+    // truncated at 80 columns the way the footer hint can be.
+    write('\x15')
+    await sleep(150)
+    write('/clear\r')
+    check(
+      'the transcript can be emptied for the language check',
+      await until((t) => stripAnsi(t).includes('type a message')),
+    )
+    const beforeLang = output.length
+    write('/lang\r')
+    check(
+      'the interface language switches',
+      await until((t) => stripAnsi(t.slice(beforeLang)).includes('输入消息')),
+    )
+
     // (e) a single ctrl+c does NOT exit...
     write('\x03')
     await sleep(400)
@@ -167,7 +225,12 @@ async function main(): Promise<void> {
     check('the subject exits on the second ctrl+c', await until(() => exitCode !== null, 5_000))
     check('the exit code is zero', exitCode === 0)
     check('the alternate screen is left', output.includes(ALT_OFF))
-    check('the subject reports a clean done line', /SUBJECT-DONE 1/.test(stripAnsi(output)))
+    const done = stripAnsi(output)
+    check('the subject reports a clean done line', /SUBJECT-DONE \d/.test(done))
+    // (k) the notices prove every panel decision went through the real key path.
+    check('the approval was allowed from the panel', done.includes('allowed shell once'))
+    check('the question was answered from the panel', /answered [a-z]/.test(done))
+    check('the language switch was recorded', done.includes('language zh-CN'))
   } finally {
     clearTimeout(watchdog)
     if (alive()) child.kill('SIGKILL')

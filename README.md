@@ -652,14 +652,18 @@ regression still would.
     provider parses the real command line.
   - `dsh --profile tui </dev/null` boots the bundle and exits on the non-TTY
     guard.
-- **25 suites, 1359 assertions**, covering rendering (including a pty round
+- **25 suites, 1371 assertions**, covering rendering (including a pty round
   trip through the real screen, decoder, and frame renderer), streaming
   projection, queueing, steering, persistence, session storage, cross-session
   search, the panels, the plugin seam, i18n, the fleet, and the render cache.
 - **The reply projection is round-trip tested, the boot path is not
   automated.** A real agent streaming through `agent/assistant-stream` is
   proven by types, unit rendering, and the synthetic stream replay; the full
-  boot-to-model turn is still driven by a person.
+  boot-to-model turn is still driven by a person. The terminal layer's own
+  integration test drives the real `Screen`, key decoder, and renderer under
+  `script(1)` through the `@` menu, an approval panel, a questionnaire, and a
+  language switch — which is how a space that never matched the panel's toggle
+  was caught.
 - **`ctx.sessionQuery` listing is probed.** The service is documented as
   offering "filtered lists" without a stable method name, so `/resume` and
   `/tree` try `listSessions`, `list`, then `querySessions` and report cleanly
