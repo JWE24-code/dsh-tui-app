@@ -167,7 +167,27 @@ async function main(): Promise<void> {
       'tab accepts the completion into the composer',
       await until((t) => stripAnsi(t.slice(beforeEnter)).includes('src/tui/state.ts ')),
     )
-    write('\x15') // ctrl+u clears the composer
+    // (l) a real lone Escape — not part of a sequence, just the byte — must
+    // arrive as the escape key and dismiss the menu that is open. This is the
+    // shape a terminal sends when a person presses Escape, and it was the
+    // shape that produced no key at all before the decoder waited for a
+    // sequence tail (the next keystroke then became a phantom alt chord).
+    write('\x15')
+    await sleep(150)
+    write('@st')
+    check(
+      'the menu is open again for the escape check',
+      await until((t) => stripAnsi(t).includes('src/tui/state.ts')),
+    )
+    write('\x1b')
+    check(
+      'a lone escape dismisses the menu',
+      await until((t) => stripAnsi(t).includes('escape closed the menu'), 3_000),
+    )
+
+    write('@st')
+    await sleep(200)
+    write('\x15') // clear, so the approval step starts from an empty composer
     await sleep(150)
 
     // (h) an approval panel owns the keyboard and 1 allows once.
@@ -231,6 +251,7 @@ async function main(): Promise<void> {
     check('the approval was allowed from the panel', done.includes('allowed shell once'))
     check('the question was answered from the panel', /answered [a-z]/.test(done))
     check('the language switch was recorded', done.includes('language zh-CN'))
+    check('the lone escape was not misread as an alt chord', !done.includes('alt+'))
   } finally {
     clearTimeout(watchdog)
     if (alive()) child.kill('SIGKILL')

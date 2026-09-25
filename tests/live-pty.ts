@@ -103,6 +103,30 @@ async function main(): Promise<void> {
     check('the turn left the composer ready for the next prompt', stripAnsi(output).includes('Ask the harness'))
     check('the transcript kept the prompt', stripAnsi(output).includes(PROMPT.slice(0, 12)))
 
+    // Command surfaces, exercised against the real booted app rather than a
+    // stub: each overlay has to appear with its own content, and esc has to
+    // close it again before the next one opens.
+    const probes: { command: string; expect: string }[] = [
+      { command: '/about', expect: 'dsh-tui-app' },
+      { command: '/jobs', expect: 'Background jobs' },
+      { command: '/mcp', expect: 'MCP servers' },
+      { command: '/tree', expect: 'Session tree' },
+      { command: '/help', expect: 'Commands' },
+    ]
+    for (const probe of probes) {
+      const before = output.length
+      child.stdin?.write(`${probe.command}\r`)
+      const shown = await until(() => stripAnsi(output.slice(before)).includes(probe.expect), 20_000)
+      if (!shown) {
+        console.error(`--- ${probe.command} did not show ${probe.expect} ---`)
+        console.error(stripAnsi(output.slice(before)).slice(-600))
+      }
+      check(`${probe.command} opens its surface`, shown)
+      child.stdin?.write('\x1b')
+      await sleep(250)
+    }
+    check('the app is still alive after the command walk', exitCode === null)
+
     // Quit cleanly the way a person does.
     child.stdin?.write('\x03')
     await sleep(400)

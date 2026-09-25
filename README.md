@@ -129,6 +129,7 @@ overrides background detection; `NO_COLOR` disables styling.
 | `@` | File completion over the workspace · `tab`/`enter` accepts · `esc` dismisses |
 | `?` | Open the key reference on an empty composer |
 | `esc` | Interrupt a streaming reply |
+| `esc` (alone) | Recognized after a 50 ms grace, so a lone press is never mistaken for a sequence's first byte |
 | `alt+e` | Edit the draft in `$VISUAL`/`$EDITOR` · non-zero exit keeps it |
 | `alt+↑`/`alt+↓` | Select a transcript turn (gold bar) · `esc` clears |
 | `alt+c` | Copy the selected turn over OSC 52 |
@@ -679,7 +680,7 @@ regression still would.
     provider parses the real command line.
   - `dsh --profile tui </dev/null` boots the bundle and exits on the non-TTY
     guard.
-- **27 suites, 1420 assertions**, covering rendering (including a pty round
+- **28 suites, 1446 assertions**, covering rendering (including a pty round
   trip through the real screen, decoder, and frame renderer), streaming
   projection, queueing, steering, persistence, session storage, cross-session
   search, the panels, the plugin seam, i18n, the fleet, and the render cache.

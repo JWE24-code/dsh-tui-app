@@ -159,12 +159,76 @@ export function decode(input: string): { keys: Key[]; rest: string } {
   return { keys, rest: '' }
 }
 
-/** A stateful decoder that carries an incomplete sequence between chunks. */
-export function createDecoder(): (chunk: string) => Key[] {
+/**
+ * How long a lone escape waits for the rest of a sequence before it is read as
+ * the escape key.
+ *
+ * A terminal sends the same byte for "the user pressed Escape" and for the
+ * first byte of `ESC [ A`; only time tells them apart. Without this, a lone
+ * Escape produced no key at all and the *next* keystroke was misread as an
+ * `alt+` chord, so every documented `esc` — interrupt, close an overlay,
+ * dismiss a menu — was dead. Vim's own `ttimeoutlen` sits in this range.
+ */
+export const ESCAPE_DELAY_MS = 50
+
+/** A stateful decoder, plus the handles a terminal loop needs to own it. */
+export interface KeyDecoder {
+  /** Decode one chunk; complete keys come back, an unfinished tail is held. */
+  (chunk: string): Key[]
+  /** Read a held lone escape now, as its own key. */
+  flush(): void
+  /** Cancel any pending timer, so a stopped screen emits nothing more. */
+  dispose(): void
+}
+
+/**
+ * A stateful decoder that carries an incomplete sequence between chunks.
+ *
+ * @param emit - receives a key that arrives asynchronously (a flushed lone
+ *   escape), because no further chunk will carry it.
+ * @param escapeDelayMs - how long a lone escape waits; see {@link ESCAPE_DELAY_MS}.
+ */
+export function createDecoder(
+  emit?: (key: Key) => void,
+  escapeDelayMs: number = ESCAPE_DELAY_MS,
+): KeyDecoder {
   let pending = ''
-  return (chunk: string): Key[] => {
+  let timer: ReturnType<typeof setTimeout> | undefined
+
+  const cancel = (): void => {
+    if (timer !== undefined) {
+      clearTimeout(timer)
+      timer = undefined
+    }
+  }
+
+  const decoder = ((chunk: string): Key[] => {
+    cancel()
     const { keys, rest } = decode(pending + chunk)
     pending = rest
+    // A lone escape is ambiguous until time passes: it is either the key
+    // itself or the head of a sequence whose rest has not arrived.
+    if (pending === ESC && emit !== undefined) {
+      timer = setTimeout(() => {
+        timer = undefined
+        if (pending === ESC) {
+          pending = ''
+          emit({ name: 'esc', text: '' })
+        }
+      }, escapeDelayMs)
+      // Never hold the process open for it.
+      timer.unref?.()
+    }
     return keys
+  }) as KeyDecoder
+
+  decoder.flush = (): void => {
+    cancel()
+    if (pending === ESC) {
+      pending = ''
+      emit?.({ name: 'esc', text: '' })
+    }
   }
+  decoder.dispose = cancel
+  return decoder
 }

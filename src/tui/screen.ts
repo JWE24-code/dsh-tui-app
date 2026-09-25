@@ -8,7 +8,7 @@
  * @module
  */
 
-import { createDecoder, type Key } from './keys.ts'
+import { createDecoder, type Key, type KeyDecoder } from './keys.ts'
 import { displayWidth, truncate } from './text.ts'
 
 const ESC = ''
@@ -88,7 +88,7 @@ export interface ScreenOptions {
 export class Screen {
   private previous: string[] = []
   private started = false
-  private readonly decode = createDecoder()
+  private readonly decode: KeyDecoder
   private readonly onData: (chunk: Buffer | string) => void
   private readonly onResize: () => void
   private cursor: { row: number; column: number } | undefined
@@ -98,6 +98,11 @@ export class Screen {
   constructor(handlers: ScreenHandlers, options: ScreenOptions = {}) {
     this.handlers = handlers
     this.mouse = options.mouse === true
+    // The decoder emits a lone escape asynchronously — nothing else will carry
+    // it — so it needs the same handler the chunk path uses.
+    this.decode = createDecoder((key) => {
+      this.handlers.onKey(key)
+    })
     this.onData = (chunk) => {
       for (const key of this.decode(chunk.toString('utf8' as BufferEncoding))) {
         this.handlers.onKey(key)
@@ -135,6 +140,8 @@ export class Screen {
   stop(): void {
     if (!this.started) return
     this.started = false
+    // Drop a held escape too: after teardown no key may reach the app.
+    this.decode.dispose()
     process.stdin.off('data', this.onData)
     process.stdout.off('resize', this.onResize)
     if (process.stdin.isTTY === true) process.stdin.setRawMode(false)

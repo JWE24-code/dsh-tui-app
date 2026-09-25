@@ -32,7 +32,11 @@ const composer = new Composer()
 let panel: ApprovalPanel | QuestionsPanel | undefined
 const atMenu = new AtMenu()
 const CANDIDATES = ['src/tui/state.ts', 'src/tui/view.ts', 'src/index.ts', 'README.md']
-/** Notices the transcript records for the driver to assert on. */
+/**
+ * Notices the driver asserts on. The newest is also painted as the status
+ * line, so a driver can wait for an event instead of only reading the final
+ * line after exit.
+ */
 const notices: string[] = []
 
 function syncAtMenu(): void {
@@ -65,7 +69,7 @@ function snapshot(): Snapshot {
     streamingTools: [],
     streaming: false,
     spinner: '⠋',
-    status: '',
+    status: notices.length === 0 ? '' : (notices[notices.length - 1] ?? ''),
     statusIsError: false,
     overlay: '',
     showThinking: false,
@@ -158,7 +162,10 @@ const screen = new Screen({
     if (key.name === 'esc') {
       if (atMenu.open) {
         atMenu.close()
+        notices.push('escape closed the menu')
         repaint()
+      } else {
+        notices.push('escape reached the app')
       }
       return
     }
