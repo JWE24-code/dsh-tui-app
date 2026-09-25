@@ -21,6 +21,7 @@ import {
   fleetSummary,
   formatAge,
   isPresenceRecord,
+  isValidPeer,
   jumpCommand,
   mergeFleet,
   renderFleet,
@@ -420,6 +421,84 @@ check(
   'a short window keeps every line inside the width',
   tiny.lines.every((line) => displayWidth(line) <= 40),
 )
+
+// ------------------------------------------------------- adding a peer live
+
+// The host reaches an ssh command line, so the validator is a gate, not a
+// tidy-up: anything the shell would read as more than one word is refused.
+check('a plain hostname is usable', isValidPeer('oma1'))
+check('a dotted name is usable', isValidPeer('box.home.arpa'))
+check('user@host is usable', isValidPeer('joeri@192.168.22.28'))
+check('an ssh alias with a dash is usable', isValidPeer('build-box'))
+check('empty is refused', !isValidPeer(''))
+check('whitespace only is refused', !isValidPeer('   '))
+check('a leading dash is refused', !isValidPeer('-oProxyCommand=evil'))
+check('a space is refused', !isValidPeer('host other'))
+check('a semicolon is refused', !isValidPeer('host;reboot'))
+check('a backtick is refused', !isValidPeer('host`id`'))
+check('a dollar is refused', !isValidPeer('host$(id)'))
+check('an ampersand is refused', !isValidPeer('host&'))
+check('a pipe is refused', !isValidPeer('a|b'))
+check('a newline is refused', !isValidPeer('host\nrm -rf /'))
+check('an absurdly long name is refused', !isValidPeer('a'.repeat(256)))
+check('surrounding space is tolerated', isValidPeer('  oma1  '))
+
+{
+  const view = new FleetView()
+  view.show()
+  view.setResult([session({ host: 'peer-a', sessionId: 'p1' })], [])
+
+  check('the prompt starts closed', !view.adding)
+  view.beginAdd()
+  check('the prompt opens empty', view.adding && view.draft === '')
+
+  view.typeAdd('om')
+  view.typeAdd('a1')
+  check('typing accumulates', view.draft === 'oma1')
+  view.backspaceAdd()
+  check('backspace deletes one character', view.draft === 'oma')
+  view.typeAdd('1')
+
+  check('committing returns the host', view.commitAdd() === 'oma1')
+  check('committing closes the prompt', !view.adding && view.draft === '')
+
+  // A typo must not cost the whole line: the prompt stays up with the text.
+  view.beginAdd()
+  view.typeAdd('host;reboot')
+  check('an unusable host is not returned', view.commitAdd() === undefined)
+  check('the prompt survives a rejection', view.adding)
+  check('the text survives a rejection', view.draft === 'host;reboot')
+
+  view.cancelAdd()
+  check('cancelling clears the prompt', !view.adding && view.draft === '')
+  check('committing when closed returns nothing', view.commitAdd() === undefined)
+  // Keystrokes must not leak into a draft nobody is editing.
+  view.typeAdd('x')
+  check('typing while closed is ignored', view.draft === '')
+}
+
+// The pane has to show the prompt instead of the key hints, or the keys it
+// advertises are the ones being typed into the host name.
+{
+  const prompting = new FleetView()
+  prompting.show()
+  prompting.setResult([session({ host: 'peer-a', sessionId: 'p1' })], [])
+  prompting.beginAdd()
+  prompting.typeAdd('oma1')
+  const lines = render(fleetSnapshot(prompting)).lines.map((line) => stripAnsi(line))
+  check('the prompt is drawn', lines.some((line) => line.includes('add device: oma1')))
+  check('the prompt explains itself', lines.some((line) => line.includes('enter add')))
+  check(
+    'the ordinary hints step aside',
+    !lines.some((line) => line.includes('r refresh')),
+  )
+
+  prompting.cancelAdd()
+  const back = render(fleetSnapshot(prompting)).lines.map((line) => stripAnsi(line))
+  check('the hints come back', back.some((line) => line.includes('r refresh')))
+  check('the hints advertise adding', back.some((line) => line.includes('a add')))
+  check('the hints advertise removing', back.some((line) => line.includes('x remove')))
+}
 
 // eslint-disable-next-line no-console
 console.log(`ok - ${String(checks)} fleet checks passed`)

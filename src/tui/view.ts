@@ -835,11 +835,22 @@ function fleetPane(snapshot: Snapshot, geometry: Layout): string[] {
   const out = [...head, ...visible]
   while (out.length < height - 1) out.push('')
 
+  // While a device is being added the footer becomes that prompt: the keys it
+  // would otherwise advertise are the ones now being typed into it.
+  if (fleet.adding) {
+    const label = 'add device: '
+    const typed = style(fleet.draft, { fg: colText })
+    const help = muted('  enter add  ·  esc cancel')
+    const line = `${accent(label)}${typed}${help}`
+    out.push(truncate(line, width))
+    return out.slice(0, height)
+  }
+
   const current = fleet.sessions[fleet.selected]
   // Only a local session can be opened in place; a remote one is reached over
   // SSH, so the hint promises to copy the command rather than to open it.
   const action = current === undefined ? 'open' : current.local ? 'enter open' : 'enter copy ssh'
-  const hint = `↑↓ move  ·  ${action}  ·  r refresh  ·  esc back`
+  const hint = `↑↓ move  ·  ${action}  ·  a add  ·  x remove  ·  r refresh  ·  esc back`
   const count = fleet.loading ? 'refreshing…' : `${String(fleet.sessions.length)} sessions`
   const pad = Math.max(width - displayWidth(hint) - displayWidth(count), 1)
   out.push(muted(hint) + ' '.repeat(pad) + muted(count))

@@ -35,7 +35,7 @@ const VERSION = 2
 
 /** A state with only the fields a case cares about spelled out. */
 function state(partial: Partial<PersistedState> = {}): PersistedState {
-  return { inputHistory: [], thinking: false, sessions: [], activeSession: 0, ...partial }
+  return { inputHistory: [], thinking: false, peers: [], sessions: [], activeSession: 0, ...partial }
 }
 
 /** A remembered session, defaulting the fields a case is not about. */
@@ -217,6 +217,32 @@ try {
   check('the nested write kept the sessions', nestedRestored.sessions[0]?.id === 'session-n')
 } finally {
   await rm(sandbox, { recursive: true, force: true })
+}
+
+// --------------------------------------------------------------- fleet peers
+
+// Peers are remembered so the overview works without repeating --peer on every
+// launch, which is the whole reason they became editable in the pane.
+{
+  const encoded = JSON.stringify({ ...state({ peers: ['oma1', 'joeri@box'] }), version: VERSION })
+  const back = decodeState(encoded)
+  check('peers round-trip', back.peers.join(',') === 'oma1,joeri@box')
+
+  check('a file with no peers decodes to none', decodeState(
+    JSON.stringify({ ...state(), version: VERSION }),
+  ).peers.length === 0)
+
+  // A hand-edited file should not be able to put a non-string on a command line.
+  const dirty = JSON.stringify({
+    ...state(),
+    peers: ['ok', 42, null, { host: 'nope' }, 'also-ok'],
+    version: VERSION,
+  })
+  check('non-string peers are dropped', decodeState(dirty).peers.join(',') === 'ok,also-ok')
+
+  check('peers absent entirely is not fatal', decodeState(
+    JSON.stringify({ inputHistory: [], thinking: false, sessions: [], activeSession: 0, version: VERSION }),
+  ).peers.length === 0)
 }
 
 // eslint-disable-next-line no-console

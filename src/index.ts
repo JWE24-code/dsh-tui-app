@@ -85,7 +85,7 @@ import {
   type PersistedState,
 } from './persist.ts'
 import { VERSION } from './version.ts'
-import { FleetView, jumpCommand, mergeFleet } from './tui/fleet.ts'
+import { FleetView, isValidPeer, jumpCommand, mergeFleet } from './tui/fleet.ts'
 import { PresencePublisher, type PresenceInput } from './presence.ts'
 import { collectFleet, localDshHome, type PeerConfig } from './fleet-sources.ts'
 import {
@@ -189,6 +189,7 @@ const BUILTIN_COMMANDS: readonly PaletteCommand[] = [
   },
   { name: 'copy', args: '', description: 'Copy the last reply to the system clipboard' },
   { name: 'fleet', args: '', description: 'Sessions across every device (ctrl+f)' },
+  { name: 'peer', args: '[add|rm <host>]', description: 'Devices the fleet overview reads' },
   { name: 'about', args: '', description: 'Show version and connection information' },
   { name: 'help', args: '', description: 'Show keys and commands' },
   { name: 'exit', args: '', description: 'Quit dsh' },
@@ -327,6 +328,7 @@ class TuiApp {
   private persisted: PersistedState = {
     inputHistory: [],
     thinking: false,
+    peers: [],
     sessions: [],
     activeSession: 0,
   }
@@ -334,6 +336,14 @@ class TuiApp {
 
   /** The cross-device overview, and what this device publishes to it. */
   private readonly fleet = new FleetView()
+  /**
+   * Devices the overview reads, from `--peer` and from what was saved.
+   *
+   * Held here rather than read from config each time because the pane can add
+   * to it: needing a relaunch to see a machine you just remembered is the
+   * whole reason this is editable.
+   */
+  private peers: string[] = []
   private readonly presence: PresencePublisher
   /** Signature of the last published set, so an unchanged paint writes nothing. */
   private presenceKey = ''
@@ -393,6 +403,9 @@ class TuiApp {
     if (this.config.thinking === undefined) this.showThinking = this.persisted.thinking
     if (this.persisted.theme !== undefined) applyTheme(this.persisted.theme)
     if (this.persisted.expandTools !== undefined) this.expandTools = this.persisted.expandTools
+    // Flags and remembered devices are one list from here on; a duplicate
+    // between them should not make a peer appear twice in the overview.
+    this.peers = [...new Set([...(this.config.peers ?? []), ...this.persisted.peers])]
 
     const selection = defaultModel.currentSelection()
     this.tab.selection.current =
@@ -1119,6 +1132,34 @@ class TuiApp {
     this.presence.publish(sessions)
   }
 
+  /**
+   * Adopt a device, remembering it for next time.
+   *
+   * Flags and saved peers are one list once the app is running, so a device
+   * added here is indistinguishable from one passed on the command line.
+   */
+  private addPeer(host: string): boolean {
+    const trimmed = host.trim()
+    if (!isValidPeer(trimmed)) {
+      this.setStatus(`not a usable host: ${trimmed}`, true)
+      return false
+    }
+    if (this.peers.includes(trimmed)) {
+      this.setStatus(`${trimmed} is already in the fleet`)
+      return false
+    }
+    this.peers = [...this.peers, trimmed]
+    this.persistSoon()
+    return true
+  }
+
+  private removePeer(host: string): boolean {
+    if (!this.peers.includes(host)) return false
+    this.peers = this.peers.filter((entry) => entry !== host)
+    this.persistSoon()
+    return true
+  }
+
   /** Open the overview and start a collection round. */
   private openFleet(): void {
     this.fleet.show()
@@ -1136,7 +1177,7 @@ class TuiApp {
    * peer appears as a named error under the list instead of blocking the UI.
    */
   private async refreshFleet(): Promise<void> {
-    const peers: PeerConfig[] = (this.config.peers ?? []).map((host) => ({ host }))
+    const peers: PeerConfig[] = this.peers.map((host) => ({ host }))
     try {
       const sources = await collectFleet(peers)
       // The overview may have been closed while SSH was still running.
@@ -1184,6 +1225,12 @@ class TuiApp {
   }
 
   private handleFleetKey(key: Key): void {
+    // While the prompt is up it owns the keyboard, or typing "r" into a host
+    // name would refresh the list instead.
+    if (this.fleet.adding) {
+      this.handleFleetPromptKey(key)
+      return
+    }
     switch (key.name) {
       case 'esc':
       case 'ctrl+c':
@@ -1211,11 +1258,76 @@ class TuiApp {
         void this.refreshFleet()
         break
 
+      case 'a':
+        this.fleet.beginAdd()
+        this.setStatus('')
+        this.paint()
+        break
+
+      case 'x':
+      case 'delete': {
+        // Only a remote row names a peer; this device is not one of them.
+        const row = this.fleet.current()
+        if (row === undefined || row.local) {
+          this.setStatus('select another device to remove it from the fleet')
+          this.paint()
+          break
+        }
+        if (this.removePeer(row.host)) {
+          this.setStatus(`removed ${row.host} from the fleet`)
+          this.fleet.loading = true
+          this.paint()
+          void this.refreshFleet()
+        } else {
+          this.setStatus(`${row.host} was not added here, so it cannot be removed`)
+          this.paint()
+        }
+        break
+      }
+
       case 'enter':
         this.openFleetSelection()
         break
 
       default:
+        break
+    }
+  }
+
+  private handleFleetPromptKey(key: Key): void {
+    switch (key.name) {
+      case 'esc':
+      case 'ctrl+c':
+        this.fleet.cancelAdd()
+        this.setStatus('')
+        this.paint()
+        break
+
+      case 'backspace':
+        this.fleet.backspaceAdd()
+        this.paint()
+        break
+
+      case 'enter': {
+        const draft = this.fleet.draft.trim()
+        const host = this.fleet.commitAdd()
+        if (host === undefined) {
+          this.setStatus(`not a usable host: ${draft}`, true)
+          this.paint()
+          break
+        }
+        if (this.addPeer(host)) this.setStatus(`added ${host}`)
+        this.fleet.loading = true
+        this.paint()
+        void this.refreshFleet()
+        break
+      }
+
+      default:
+        if (key.text !== '' && !key.text.includes('\n')) {
+          this.fleet.typeAdd(key.text)
+          this.paint()
+        }
         break
     }
   }
@@ -1629,6 +1741,7 @@ class TuiApp {
       thinking: this.showThinking,
       theme: activeTheme(),
       expandTools: this.expandTools,
+      peers: this.peers,
       sessions: this.openSessions(),
       activeSession: this.activeSessionIndex(),
     }
@@ -2110,6 +2223,29 @@ class TuiApp {
         this.openFleet()
         return
 
+      case 'peer': {
+        const [verb = '', ...rest] = rawInput.trim().split(/\s+/)
+        const host = rest.join(' ').trim()
+        if (verb === '') {
+          this.setStatus(
+            this.peers.length === 0
+              ? 'no devices yet — /peer add <host>, or press a in the fleet'
+              : `fleet devices: ${this.peers.join(', ')}`,
+          )
+        } else if (verb === 'add') {
+          if (this.addPeer(host)) this.setStatus(`added ${host} — ctrl+f to see it`)
+        } else if (verb === 'rm' || verb === 'remove') {
+          this.setStatus(
+            this.removePeer(host) ? `removed ${host}` : `${host} is not in the fleet`,
+            !this.peers.includes(host) && host === '',
+          )
+        } else {
+          this.setStatus('usage: /peer [add|rm <host>]', true)
+        }
+        this.paint()
+        return
+      }
+
       case 'about':
         this.showAbout()
         return
@@ -2158,7 +2294,12 @@ class TuiApp {
     this.setStatus(`running /${name}…`)
     this.paint()
     try {
-      const execution = await registry.execute(agent, line, [], undefined)
+      // execute() takes a required AbortSignal and reads .aborted on it.
+      // Passing undefined threw "Cannot read properties of undefined" out of
+      // the registry, which surfaced as every Harness command failing --
+      // /permission, /plan, /goal -- with an error that named nothing useful.
+      const controller = new AbortController()
+      const execution = await registry.execute(agent, line, [], controller.signal)
       if (execution === undefined) {
         this.setStatus(`unknown command /${name} — type / to see them`, true)
         this.paint()

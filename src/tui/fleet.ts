@@ -308,6 +308,22 @@ export function fleetLineOf(sessions: readonly FleetSession[], index: number): n
 }
 
 /**
+ * Whether a string is safe and sensible to use as a peer.
+ *
+ * The value ends up on an `ssh` command line, so this is a gate rather than a
+ * tidy-up: anything a shell would treat as more than one word, or that `ssh`
+ * would read as an option, is refused outright instead of being escaped and
+ * hoped for. What remains is the shape of a host, an alias, or `user@host`.
+ */
+export function isValidPeer(host: string): boolean {
+  const trimmed = host.trim()
+  if (trimmed === '' || trimmed.length > 255) return false
+  // A leading dash would be parsed by ssh as a flag, not a destination.
+  if (trimmed.startsWith('-')) return false
+  return /^[A-Za-z0-9_.@:[\]-]+$/.test(trimmed)
+}
+
+/**
  * The overview's interaction state: what was collected, and where the cursor is.
  *
  * Kept beside the renderer because it is the same concern and equally pure —
@@ -321,6 +337,15 @@ export class FleetView {
   sessions: FleetSession[] = []
   sources: FleetSource[] = []
   selected = 0
+  /**
+   * Set while the pane is asking for a device to add.
+   *
+   * Adding a peer belongs here rather than only on the command line, because
+   * the list is exactly where you notice a device is missing from it.
+   */
+  adding = false
+  /** What has been typed into that prompt so far. */
+  draft = ''
 
   show(): void {
     this.open = true
@@ -359,6 +384,43 @@ export class FleetView {
 
   current(): FleetSession | undefined {
     return this.sessions[this.selected]
+  }
+
+  /** Start asking for a device to add. */
+  beginAdd(): void {
+    this.adding = true
+    this.draft = ''
+  }
+
+  /** Abandon the prompt, leaving the list as it was. */
+  cancelAdd(): void {
+    this.adding = false
+    this.draft = ''
+  }
+
+  typeAdd(text: string): void {
+    if (!this.adding) return
+    this.draft += text
+  }
+
+  backspaceAdd(): void {
+    if (!this.adding) return
+    this.draft = this.draft.slice(0, -1)
+  }
+
+  /**
+   * Finish the prompt, returning the host to add.
+   *
+   * A rejected name leaves the prompt open with the text intact, so a typo is
+   * corrected rather than retyped.
+   */
+  commitAdd(): string | undefined {
+    if (!this.adding) return undefined
+    const host = this.draft.trim()
+    if (!isValidPeer(host)) return undefined
+    this.adding = false
+    this.draft = ''
+    return host
   }
 
   private clamp(): void {

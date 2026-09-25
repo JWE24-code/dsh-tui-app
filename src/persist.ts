@@ -44,6 +44,8 @@ export interface PersistedState {
    * ran; absent means the default, which is to list them.
    */
   expandTools?: boolean
+  /** Devices to include in the fleet overview, as `ssh` destinations. */
+  peers: string[]
   /** Sessions that were open at the last exit, in tab order. */
   sessions: PersistedSession[]
   /** Index into {@link PersistedState.sessions} of the tab that was on screen. */
@@ -67,7 +69,7 @@ type OnDisk = PersistedState & { version?: number }
 
 /** The state used when there is nothing readable on disk. */
 function fallbackState(): PersistedState {
-  return { inputHistory: [], thinking: false, sessions: [], activeSession: 0 }
+  return { inputHistory: [], thinking: false, peers: [], sessions: [], activeSession: 0 }
 }
 
 /** Where the state file lives: `$DSH_HOME/tui-state.json`, default `~/.dsh`. */
@@ -131,6 +133,9 @@ export function decodeState(raw: string): PersistedState {
       ? parsed.inputHistory.filter((entry): entry is string => typeof entry === 'string')
       : [],
     thinking: parsed.thinking === true,
+    peers: Array.isArray(parsed.peers)
+      ? parsed.peers.filter((entry): entry is string => typeof entry === 'string')
+      : [],
     theme: typeof parsed.theme === 'string' ? parsed.theme : undefined,
     expandTools: parsed.expandTools === false ? false : undefined,
     sessions,
