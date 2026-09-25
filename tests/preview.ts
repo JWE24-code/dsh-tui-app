@@ -6,7 +6,7 @@
  * Run with: node --experimental-strip-types tests/preview.ts [state]
  */
 
-import { Composer, Palette, Picker } from '../src/tui/state.ts'
+import { Composer, Palette, Picker, textMessage } from '../src/tui/state.ts'
 import { render, type Snapshot } from '../src/tui/view.ts'
 
 const state = process.argv[2] ?? 'normal'
@@ -63,26 +63,37 @@ const snapshot: Snapshot = {
   host: 'local harness',
   modelName: 'deepseek-chat',
   messages: [
-    { role: 'user', content: 'how do i tail the last 50 lines of a container log?' },
+    textMessage('user', 'how do i tail the last 50 lines of a container log?'),
     {
       role: 'assistant',
-      content: [
-        'Use `docker logs` with `--tail` and `-f`:',
-        '',
-        '```sh',
-        'docker logs --tail 50 -f webui',
-        '```',
-        '',
-        '- `--since 10m` — only the last ten minutes',
-        '- `-t` — prefix each line with a timestamp',
-      ].join('\n'),
       reasoning: 'The user wants a bounded tail, so --tail plus -f is the right pair.',
-      tools: [{ name: 'shell', status: 'ok', detail: 'docker ps' }],
+      segments: [
+        { kind: 'text', text: 'Let me see what is running.' },
+        { kind: 'tool', tool: { name: 'shell', status: 'ok', detail: 'docker ps' } },
+        {
+          kind: 'text',
+          text: [
+            'Use `docker logs` with `--tail` and `-f`:',
+            '',
+            '```sh',
+            'docker logs --tail 50 -f webui',
+            '```',
+            '',
+            '- `--since 10m` — only the last ten minutes',
+            '- `-t` — prefix each line with a timestamp',
+          ].join('\n'),
+        },
+      ],
     },
   ],
-  streamingText: state === 'stream' ? 'Checking the container list' : '',
   streamingReasoning: '',
-  streamingTools: state === 'stream' ? [{ name: 'shell', status: 'running' as const }] : [],
+  streamingSegments:
+    state === 'stream'
+      ? [
+          { kind: 'text', text: 'Checking the container list' },
+          { kind: 'tool', tool: { name: 'shell', status: 'running' as const } },
+        ]
+      : [],
   streaming: state === 'stream',
   spinner: '⠹',
   status: state === 'stream' ? '' : '',

@@ -7,7 +7,7 @@
 import assert from 'node:assert/strict'
 
 import { transcriptMarkdown } from '../src/tui/export.ts'
-import type { Message } from '../src/tui/state.ts'
+import { textMessage, type Message } from '../src/tui/state.ts'
 
 let checks = 0
 function check(name: string, condition: boolean): void {
@@ -16,15 +16,15 @@ function check(name: string, condition: boolean): void {
 }
 
 const messages: Message[] = [
-  { role: 'user', content: 'hello there' },
+  textMessage('user', 'hello there'),
   {
     role: 'assistant',
-    content: 'Hi!\nTwo lines.',
     reasoning: 'think hard',
-    tools: [
-      { name: 'grep', status: 'ok' },
-      { name: 'read', status: 'error', detail: 'no file' },
-      { name: 'ls', status: 'running' },
+    segments: [
+      { kind: 'text', text: 'Hi!\nTwo lines.' },
+      { kind: 'tool', tool: { name: 'grep', status: 'ok' } },
+      { kind: 'tool', tool: { name: 'read', status: 'error', detail: 'no file' } },
+      { kind: 'tool', tool: { name: 'ls', status: 'running' } },
     ],
   },
 ]
@@ -35,15 +35,35 @@ check('user turn is a quoted section', doc.includes('## >') && doc.includes('> h
 check('assistant turn is a heading', doc.includes('## assistant'))
 check('assistant content appears verbatim', doc.includes('Hi!') && doc.includes('Two lines.'))
 check('reasoning is wrapped in a details block', doc.includes('<details><summary>thinking</summary>'))
-check('tools get their own section', doc.includes('**Tools**'))
 check('ok tool is ticked', doc.includes('- [x] `grep`'))
 check('error tool is unticked with detail', doc.includes('- [ ] `read` — no file'))
 check('running tool is indeterminate', doc.includes('- [~] `ls`'))
 
+// The document keeps the turn's order: a call is written where it happened, so
+// the prose that explains a result sits under the call that produced it.
+const ordered = transcriptMarkdown(
+  [
+    {
+      role: 'assistant',
+      segments: [
+        { kind: 'text', text: 'Checking the containers.' },
+        { kind: 'tool', tool: { name: 'bash', status: 'ok', detail: 'docker ps' } },
+        { kind: 'text', text: 'Only webui is up.' },
+      ],
+    },
+  ],
+  't',
+)
+check(
+  'an exported turn reads in the order it happened',
+  ordered.indexOf('Checking the containers.') < ordered.indexOf('- [x] `bash`') &&
+    ordered.indexOf('- [x] `bash`') < ordered.indexOf('Only webui is up.'),
+)
+
 // A command result labels the assistant turn with its outcome.
-const ok = transcriptMarkdown([{ role: 'assistant', content: 'done', command: { name: 'compact', ok: true } }], 't')
+const ok = transcriptMarkdown([textMessage('assistant', 'done', { command: { name: 'compact', ok: true } })], 't')
 check('a successful command is labelled ok', ok.includes('## assistant (ok)'))
-const failed = transcriptMarkdown([{ role: 'assistant', content: 'done', command: { name: 'compact', ok: false } }], 't')
+const failed = transcriptMarkdown([textMessage('assistant', 'done', { command: { name: 'compact', ok: false } })], 't')
 check('a failed command is labelled failed', failed.includes('## assistant (failed)'))
 
 // An empty title and empty transcript fall back cleanly.

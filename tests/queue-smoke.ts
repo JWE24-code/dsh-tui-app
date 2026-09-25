@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict'
 
-import { Composer, Palette, Picker, queueShouldDrain } from '../src/tui/state.ts'
+import { Composer, Palette, Picker, queueShouldDrain, textMessage } from '../src/tui/state.ts'
 import { render } from '../src/tui/view.ts'
 import { stripAnsi } from '../src/tui/text.ts'
 
@@ -24,9 +24,8 @@ function snapshot(overrides: Record<string, unknown>): Record<string, unknown> {
     host: 'local harness',
     modelName: 'test-model',
     messages: [],
-    streamingText: '',
+    streamingSegments: [],
     streamingReasoning: '',
-    streamingTools: [],
     streaming: false,
     spinner: '⠋',
     status: '',
@@ -57,15 +56,15 @@ function lines(frame: Record<string, unknown>): string[] {
 }
 
 // A snapshot without the optional field renders exactly as before.
-const plain = lines(snapshot({ messages: [{ role: 'user', content: 'hello' }] }))
+const plain = lines(snapshot({ messages: [textMessage('user', 'hello')] }))
 check('no queue field renders the plain transcript', plain.some((line) => line.includes('hello')))
 check('no queue field prints no hint', !plain.some((line) => line.includes('queued')))
 
 // Queued prompts appear as dimmed bars under the streaming block, with the hint.
 const queued = lines(snapshot({
-  messages: [{ role: 'user', content: 'first' }],
+  messages: [textMessage('user', 'first')],
   streaming: true,
-  streamingText: 'thinking hard',
+  streamingSegments: [{ kind: 'text', text: 'thinking hard' }],
   queued: ['wait one', 'wait two'],
 }))
 check('each queued prompt renders with the bar', queued.some((line) => line.includes('▌ wait one')))

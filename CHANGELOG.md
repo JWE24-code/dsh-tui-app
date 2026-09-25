@@ -145,7 +145,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   quitting; a second press within 1.5 seconds exits. A stray ctrl+c no longer
   throws away the whole session.
 
+### Changed
+
+- **A turn now reads in the order it happened.** The transcript held a turn's
+  prose as one string and its tool calls as a separate list, then drew every
+  call above all the text — so a reply that narrated its way through several
+  calls arrived as a block of calls followed by one run of concatenated
+  sentences, with nothing to say which call the next sentence was about. Order
+  is now part of the model: a turn is a list of `Segment`s (text or call) in
+  arrival order, text after a call opens a new segment instead of extending the
+  one before it, and the renderer walks that list. Each call is one line where
+  it was made; `ctrl+o` adds its outcome under it, and the hint that advertises
+  the expansion appears only when there is an outcome to reveal. `/export`
+  writes the same order, and `/copy` joins the prose with blank lines so the two
+  halves of a narration stay two paragraphs.
+
 ### Fixed
+
+- **`ctrl+o` and `/thinking` did nothing to settled turns.** The render cache
+  added with the message-line optimisation keyed on the message and the width
+  but not on the two toggles that change a turn's lines, so flipping either one
+  re-rendered the live turn and served every earlier turn from the stale cache.
+  Both are part of the key now.
+
+- **The render benchmark could not run.** `scripts/` was outside
+  `tsconfig.typecheck.json`, so `scripts/bench-render.ts` drifted out of step
+  with the transcript model and failed at runtime rather than in the typecheck.
+  It is in the typechecked set now.
 
 - **CI is green again: the test suite no longer reaches for the Harness.**
   `tests/tui-host-smoke.ts` imported `src/tui-host.ts`, which imports Cordis,

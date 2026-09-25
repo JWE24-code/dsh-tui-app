@@ -7,7 +7,7 @@
  * (which costs >100x), not machine noise.
  */
 import assert from 'node:assert/strict'
-import { Composer, Palette, Picker, type Message } from '../src/tui/state.ts'
+import { Composer, Palette, Picker, textMessage, type Message } from '../src/tui/state.ts'
 import { render, type Snapshot } from '../src/tui/view.ts'
 
 let checks = 0
@@ -19,12 +19,14 @@ function check(label: string, condition: boolean): void {
 function history(count: number): Message[] {
   const out: Message[] = []
   for (let index = 0; index < count; index += 1) {
-    if (index % 2 === 0) out.push({ role: 'user', content: `prompt ${String(index)}` })
+    if (index % 2 === 0) out.push(textMessage('user', `prompt ${String(index)}`))
     else {
       out.push({
         role: 'assistant',
-        content: `answer ${String(index)}\n\n- one\n- two with more words to wrap`,
-        tools: [{ id: `t${String(index)}`, name: 'bash', status: 'ok', detail: 'ls' }],
+        segments: [
+          { kind: 'tool', tool: { id: `t${String(index)}`, name: 'bash', status: 'ok', detail: 'ls' } },
+          { kind: 'text', text: `answer ${String(index)}\n\n- one\n- two with more words to wrap` },
+        ],
       })
     }
   }
@@ -39,9 +41,8 @@ function snapshot(messages: Message[], columns = 120, rows = 40): Snapshot {
     host: 'h',
     modelName: 'm',
     messages,
-    streamingText: '',
+    streamingSegments: [],
     streamingReasoning: '',
-    streamingTools: [],
     streaming: false,
     spinner: '⠋',
     status: '',
@@ -93,8 +94,10 @@ const live = render({
   ...streaming,
   streaming: true,
   spinner: '⠹',
-  streamingText: 'working on it',
-  streamingTools: [{ id: 'x', name: 'bash', status: 'running', detail: 'sleep 1' }],
+  streamingSegments: [
+    { kind: 'text', text: 'working on it' },
+    { kind: 'tool', tool: { id: 'x', name: 'bash', status: 'running', detail: 'sleep 1' } },
+  ],
 }).lines
 check('a live turn renders', live.some((line) => line.includes('working on it')))
 

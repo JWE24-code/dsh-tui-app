@@ -170,9 +170,8 @@ function frameWith(panel: ReturnType<QuestionsPanel['view']>): { lines: string[]
     host: 'local harness',
     modelName: 'deepseek-chat',
     messages: [],
-    streamingText: '',
+    streamingSegments: [],
     streamingReasoning: '',
-    streamingTools: [],
     streaming: false,
     spinner: '⠋',
     status: '',
@@ -203,8 +202,8 @@ check('the panel is drawn', drawn.lines.some((line) => line.includes('Question')
 check('no line exceeds the window', drawn.lines.every((line) => displayWidth(line) <= 70))
 check('the cursor is hidden while a panel owns the keyboard', render({
   ...{
-    columns: 70, rows: 24, title: '', host: '', modelName: '', messages: [], streamingText: '',
-    streamingReasoning: '', streamingTools: [], streaming: false, spinner: '', status: '',
+    columns: 70, rows: 24, title: '', host: '', modelName: '', messages: [], streamingSegments: [],
+    streamingReasoning: '', streaming: false, spinner: '', status: '',
     statusIsError: false, overlay: '', showThinking: false, composer: new Composer(),
     palette: new Palette(), picker: new Picker(), scrollBack: 0, expandTools: true,
     sessions: [], background: [], expandBackground: false, elapsedSeconds: 0,

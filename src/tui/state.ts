@@ -16,20 +16,96 @@ export const MAX_INPUT_LINES = 10
 /** How many sent prompts the composer history retains. */
 export const HISTORY_LIMIT = 500
 
+/**
+ * One piece of a turn, in the order it actually happened.
+ *
+ * A turn is not prose with tool calls bolted on the side: the agent says
+ * something, runs a tool, says something about what came back. Holding the text
+ * as one string and the calls as a separate list threw that order away, so the
+ * prose arrived as one run of concatenated fragments under a block of calls —
+ * which is exactly how a turn stops making sense to read.
+ */
+export type Segment =
+  | { kind: 'text'; text: string }
+  | { kind: 'tool'; tool: ToolActivity }
+
 /** One turn of the transcript. */
 export interface Message {
   role: 'user' | 'assistant'
-  content: string
+  /** The turn's pieces in arrival order — prose and tool calls interleaved. */
+  segments: readonly Segment[]
   /** Reasoning text, shown only when thinking is toggled on. */
   reasoning?: string
-  /** Tool activity observed during this turn, newest last. */
-  tools?: readonly ToolActivity[]
   /** Set when this message is a command result rather than model output. */
   command?: { name: string; ok: boolean }
   /** Set on a user prompt steered into a still-running turn. */
   steering?: boolean
   /** Images sent with this user prompt, drawn as one summary line. */
   attachments?: readonly { name: string; width: number; height: number }[]
+}
+
+/** A turn that is nothing but text: a prompt, a command result, a log replay. */
+export function textMessage(
+  role: Message['role'],
+  text: string,
+  rest: Omit<Message, 'role' | 'segments'> = {},
+): Message {
+  return { role, segments: [{ kind: 'text', text }], ...rest }
+}
+
+/**
+ * The turn's prose with the tool calls dropped, for `/copy`, `/export`,
+ * `/find`, and the tab title.
+ *
+ * Segments are joined with a blank line because a tool call is where the model
+ * stopped and started again — running the two halves together is what made a
+ * reply read as one endless paragraph.
+ */
+export function segmentsText(segments: readonly Segment[]): string {
+  return segments
+    .flatMap((segment) => (segment.kind === 'text' ? [segment.text.replace(/\s+$/, '')] : []))
+    .filter((text) => text !== '')
+    .join('\n\n')
+}
+
+export function messageText(message: Message): string {
+  return segmentsText(message.segments)
+}
+
+/**
+ * Every tool row, in order. The rows are the live objects, not copies, so a
+ * later `tool/result` event settles the row where it already sits in the turn.
+ */
+export function segmentTools(segments: readonly Segment[]): ToolActivity[] {
+  return segments.flatMap((segment) => (segment.kind === 'tool' ? [segment.tool] : []))
+}
+
+/** Every tool row in the turn, in order — for result events and counting. */
+export function messageTools(message: Message): ToolActivity[] {
+  return segmentTools(message.segments)
+}
+
+/**
+ * Append streamed text to the turn, continuing the trailing run when there is
+ * one. A tool call in between is what opens a new text segment, which is how
+ * the order gets recorded at all.
+ */
+export function appendText(segments: Segment[], text: string): void {
+  if (text === '') return
+  const last = segments[segments.length - 1]
+  if (last !== undefined && last.kind === 'text') last.text += text
+  else segments.push({ kind: 'text', text })
+}
+
+/** The tool row for a call id, wherever it sits in the turn. */
+export function findTool(
+  segments: readonly Segment[],
+  match: (tool: ToolActivity) => boolean,
+): ToolActivity | undefined {
+  for (const segment of segments) {
+    if (segment.kind === 'tool' && match(segment.tool)) return segment.tool
+  }
+  return undefined
 }
 
 /** A single tool invocation surfaced in the transcript. */

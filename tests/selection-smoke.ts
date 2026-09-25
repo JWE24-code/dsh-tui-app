@@ -4,7 +4,7 @@
  */
 import assert from 'node:assert/strict'
 import { moveSelection } from '../src/tui/state.ts'
-import { Composer, Palette, Picker } from '../src/tui/state.ts'
+import { Composer, Palette, Picker, textMessage } from '../src/tui/state.ts'
 import { displayWidth } from '../src/tui/text.ts'
 import { render, type Snapshot } from '../src/tui/view.ts'
 
@@ -35,13 +35,12 @@ function base(): Snapshot {
     host: 'local harness',
     modelName: 'deepseek-chat',
     messages: [
-      { role: 'user', content: 'first question' },
-      { role: 'assistant', content: 'first answer' },
-      { role: 'user', content: 'second question' },
+      textMessage('user', 'first question'),
+      textMessage('assistant', 'first answer'),
+      textMessage('user', 'second question'),
     ],
-    streamingText: '',
+    streamingSegments: [],
     streamingReasoning: '',
-    streamingTools: [],
     streaming: false,
     spinner: '⠋',
     status: '',
@@ -72,7 +71,7 @@ const marked = render({ ...base(), selectedTurn: 1 }).lines
 check('a selection draws the bar', marked.some((line) => line.includes('▏')))
 const twoLine = render({
   ...base(),
-  messages: [{ role: 'assistant', content: 'line one\n\nline two' }],
+  messages: [textMessage('assistant', 'line one\n\nline two')],
   selectedTurn: 0,
 }).lines
 check(
