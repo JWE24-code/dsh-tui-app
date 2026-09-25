@@ -514,7 +514,9 @@ function pickerPane(snapshot: Snapshot, geometry: Layout): string[] {
   while (out.length < height - 1) out.push('')
   const action = picker.kind === 'models' || picker.kind === 'themes'
     ? 'select'
-    : picker.kind === 'delete' ? 'delete' : 'open'
+    : picker.kind === 'plugins'
+      ? 'enable or disable'
+      : picker.kind === 'delete' ? 'delete' : 'open'
   const count = `${matches.length}/${picker.items.length}`
   out.push(
     muted(`↑↓ move  ·  enter ${action}  ·  esc back`) +
@@ -893,17 +895,17 @@ export const HELP_TEXT = [
   '- a session on another device copies the `ssh` command that reaches it',
   '- add devices with `--peer <host>`; each is read over SSH, nothing listens',
   '',
-  '**Searching**',
+  '**Plugins** (`/plugins`) — the packages this profile composes',
+  '',
+  '- `enter` — enable or disable the selected package · restart to apply',
+  '- `/plugins add <pkg>` · `/plugins remove <pkg>` — both ask to confirm',
+  '- installing runs the package\'s install scripts as you; ● marks composed',
+  '',
+  '**Searching, palettes and lists**',
   '',
   '- `/find <text>` — search · `n` / `N` on an empty composer — next / previous',
-  '',
-  '**Appearance**',
-  '',
   '- `/theme` — pick a color palette · `mono` is greyscale and high contrast',
-  '',
-  '**In a list** (`/model`, `/theme`, `/resume`)',
-  '',
-  '- type to filter · `ctrl+u` clears · `enter` selects · `esc` closes · ● in use',
+  '- in a list: type to filter · `ctrl+u` clears · `esc` closes · ● is in use',
   '',
   '**Commands**',
   '',

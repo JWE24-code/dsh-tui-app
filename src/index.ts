@@ -11,6 +11,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { homedir } from 'node:os'
 import { writeFile } from 'node:fs/promises'
 import { isAbsolute, join, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
@@ -59,6 +60,18 @@ import { activeTheme, applyTheme, listThemes } from './tui/theme.ts'
 import { projectStreamChunk } from './tui/stream.ts'
 import { transcriptMarkdown } from './tui/export.ts'
 import { deleteStoredSessionDir, findStoredSessionDir } from './sessions-store.ts'
+import {
+  activeProfileName,
+  forgetPlugin,
+  isPluginEnabled,
+  listPlugins,
+  parsePackageRequest,
+  readProfileManifest,
+  resolveProfileDir,
+  runPackageManager,
+  setPluginEnabled,
+  writeProfileManifest,
+} from './plugins.ts'
 import {
   loadState,
   MAX_RESTORED_SESSIONS,
@@ -132,6 +145,11 @@ const BUILTIN_COMMANDS: readonly PaletteCommand[] = [
   { name: 'delete', args: '', description: 'Delete a stored session for good' },
   { name: 'model', args: '[name]', description: 'Switch model; no argument lists them' },
   { name: 'theme', args: '[name]', description: 'Switch the color palette; no argument lists them' },
+  {
+    name: 'plugins',
+    args: '[add <pkg> | remove <pkg>]',
+    description: 'The packages this profile composes; no argument lists them',
+  },
   { name: 'thinking', args: '', description: "Toggle display of the reasoner's chain-of-thought" },
   { name: 'tools', args: '', description: 'List the tools this agent can call' },
   { name: 'export', args: '[file]', description: 'Write this transcript to a markdown file' },
@@ -1064,6 +1082,7 @@ class TuiApp {
           if (item.id === NEW_SESSION_ROW) void this.newSession()
           else this.selectSession(Number.parseInt(item.id, 10))
         }
+        else if (kind === 'plugins') this.togglePlugin(item.id)
         else if (kind === 'delete') this.confirmDelete(item.id, item.title)
         else void this.openSession(item.id, item.title)
         break
@@ -1718,6 +1737,10 @@ class TuiApp {
         return
       }
 
+      case 'plugins':
+        this.handlePluginsInput(rawInput.trim())
+        return
+
       case 'thinking':
         this.showThinking = !this.showThinking
         this.persistSoon()
@@ -2037,6 +2060,145 @@ class TuiApp {
     this.persistSoon()
     this.setStatus(`theme → ${activeTheme()}`)
     this.screen.invalidate()
+    this.paint()
+  }
+
+  // -------------------------------------------------------------- plugins
+
+  /** The directory of the profile this app booted from, or why there is none. */
+  private profileDir(): { dir: string; name: string } | { error: string } {
+    const name = activeProfileName()
+    if (name === undefined) {
+      return { error: 'launched without --profile — there is no plugin list to show' }
+    }
+    const home = process.env['DSH_HOME'] ?? join(homedir(), '.dsh')
+    return { dir: resolveProfileDir(name, home), name }
+  }
+
+  /** `/plugins` with nothing after it: the picker over the profile's packages. */
+  private showPlugins(): void {
+    const profile = this.profileDir()
+    if ('error' in profile) {
+      this.setStatus(profile.error, true)
+      this.paint()
+      return
+    }
+    const manifest = readProfileManifest(profile.dir)
+    const rows: PickerItem[] = listPlugins(manifest).map((entry) => ({
+      id: entry.name,
+      title: entry.name,
+      // The dependency spec, or the fact that the layer came in the box.
+      subtitle: entry.spec !== '' ? entry.spec : entry.installed ? '' : 'in-box',
+      active: entry.enabled,
+    }))
+    if (rows.length === 0) {
+      this.setStatus(`no packages listed in profile ${profile.name}`, true)
+      this.paint()
+      return
+    }
+    this.picker.show('plugins', 'Plugins', rows)
+    this.setStatus('enter toggles a package · restart applies it')
+    this.paint()
+  }
+
+  /** `/plugins <verb> …` — everything the pane cannot do with the enter key. */
+  private handlePluginsInput(input: string): void {
+    if (input === '') {
+      this.showPlugins()
+      return
+    }
+    const [verb, ...rest] = input.split(/\s+/)
+    const argument = rest.join(' ').trim()
+    if (verb === 'add') this.confirmAddPlugin(argument)
+    else if (verb === 'remove') this.confirmRemovePlugin(argument)
+    else this.setStatus('usage: /plugins [add <pkg> | remove <pkg>]', true)
+    this.paint()
+  }
+
+  /** Enable or disable the row the picker landed on. */
+  private togglePlugin(name: string): void {
+    const profile = this.profileDir()
+    if ('error' in profile) {
+      this.setStatus(profile.error, true)
+      return
+    }
+    const manifest = readProfileManifest(profile.dir)
+    const enabled = !isPluginEnabled(manifest, name)
+    const edit = setPluginEnabled(manifest, name, enabled)
+    if (!edit.changed) {
+      this.setStatus(edit.reason, true)
+      return
+    }
+    writeProfileManifest(profile.dir, edit.manifest)
+    this.setStatus(`${name} ${enabled ? 'enabled' : 'disabled'} — restart to apply`)
+  }
+
+  /** `/plugins add <pkg>` — install into the profile, then compose it. */
+  private confirmAddPlugin(argument: string): void {
+    const parsed = parsePackageRequest(argument)
+    if (!parsed.ok) {
+      this.setStatus(parsed.reason, true)
+      return
+    }
+    const request = parsed.request
+    const profile = this.profileDir()
+    if ('error' in profile) {
+      this.setStatus(profile.error, true)
+      return
+    }
+    this.confirm(
+      `Install ${request.spec} into ${profile.name}? Its install scripts run as you.`,
+      () => {
+        void this.performAddPlugin(profile.dir, request.spec, request.name)
+      },
+    )
+  }
+
+  private async performAddPlugin(dir: string, spec: string, name: string): Promise<void> {
+    this.setStatus(`installing ${spec}…`)
+    this.paint()
+    const install = await runPackageManager(dir, ['add', spec])
+    if (!install.ok) {
+      this.setStatus(install.message, true)
+      this.paint()
+      return
+    }
+    // The install may have reordered the manifest; re-read before composing.
+    const manifest = readProfileManifest(dir)
+    const edit = setPluginEnabled(manifest, name, true)
+    if (edit.changed) writeProfileManifest(dir, edit.manifest)
+    this.setStatus(`${install.message} — restart to compose it`)
+    this.paint()
+  }
+
+  /** `/plugins remove <pkg>` — uncompose it, then uninstall it. */
+  private confirmRemovePlugin(argument: string): void {
+    const name = argument.trim()
+    if (name === '') {
+      this.setStatus('name the package to remove', true)
+      return
+    }
+    const profile = this.profileDir()
+    if ('error' in profile) {
+      this.setStatus(profile.error, true)
+      return
+    }
+    this.confirm(`Remove ${name} from ${profile.name}?`, () => {
+      void this.performRemovePlugin(profile.dir, name)
+    })
+  }
+
+  private async performRemovePlugin(dir: string, name: string): Promise<void> {
+    // The stack is edited first: a name left in `bundles` with no package
+    // behind it stops the profile booting, so that must not survive a failure.
+    const manifest = readProfileManifest(dir)
+    const edit = forgetPlugin(manifest, name)
+    if (edit.changed) writeProfileManifest(dir, edit.manifest)
+    const removal = await runPackageManager(dir, ['remove', name])
+    this.setStatus(
+      removal.ok ? `${removal.message} — restart to apply` : `${removal.message} (uncomposed anyway)`,
+      !removal.ok,
+    )
     this.paint()
   }
 
