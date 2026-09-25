@@ -1,5 +1,5 @@
 /**
- * dsh-tui-app — an interactive terminal app for DeepSeek Harness.
+ * dsh-tui — an interactive terminal app for DeepSeek Harness.
  *
  * The bundle patch rides over `dsh-base` without a Host, HTTP server, or
  * browser plugin: the terminal is the only surface. This module owns the
@@ -7,7 +7,7 @@
  * stream into the transcript, and dispatching slash commands through
  * `ctx.commands` — while `./tui/*` owns everything drawn on screen.
  *
- * @module dsh-tui-app
+ * @module dsh-tui
  */
 
 import { randomUUID } from 'node:crypto'
@@ -139,7 +139,7 @@ import {
 } from './voice.ts'
 
 /** Stable Cordis plugin name. */
-export const name = 'dsh-tui-app'
+export const name = 'dsh-tui'
 
 /** Core services required before the terminal can open. */
 export const inject = ['agentDefaultModel', 'agents', 'sessions']
@@ -2691,7 +2691,7 @@ class TuiApp {
    * live self-restart would abandon the terminal the app is drawing in.
    */
   private async selfUpdate(): Promise<void> {
-    const packageName = '@jwe24-code/dsh-tui-app'
+    const packageName = '@jwe24-code/dsh-tui'
     const registry = process.env['NPM_CONFIG_REGISTRY'] ?? 'https://registry.npmjs.org'
     this.setStatus('checking npm for a newer version…')
     this.paint()
@@ -2734,7 +2734,7 @@ class TuiApp {
   private showAbout(): void {
     this.showOverlay(
       [
-        '**dsh-tui-app**',
+        '**dsh-tui**',
         '',
         `- version \`${VERSION}\``,
         `- profile \`tui\`  ·  host \`${hostLabel(process.env['DSH_HOST'] ?? 'local harness')}\``,
@@ -4393,7 +4393,7 @@ function describeError(error: unknown): string {
 export function apply(ctx: Context, config: Config): void {
   const exit = ctx.get('appExit')
   if (exit === undefined) {
-    throw new Error('dsh-tui-app: the launcher must provide ctx.appExit before the tree mounts')
+    throw new Error('dsh-tui: the launcher must provide ctx.appExit before the tree mounts')
   }
 
   const app = new TuiApp(ctx, config, exit)

@@ -6,7 +6,7 @@
  * Everything here is best-effort by design. The app must run on a read-only
  * or missing home just as well as on a writable one — persistence is a
  * convenience, never a dependency.
- * @module dsh-tui-app/persist
+ * @module dsh-tui/persist
  */
 
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'

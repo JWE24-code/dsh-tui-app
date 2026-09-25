@@ -1,5 +1,5 @@
 {
-  "name": "@jwe24-code/dsh-tui-app",
+  "name": "@jwe24-code/dsh-tui",
   "version": "0.2.0",
   "description": "An opencode-style terminal app for DeepSeek Harness: bordered composer, live token counter, slash palette, markdown transcript with syntax-highlighted code.",
   "type": "module",
@@ -10,7 +10,7 @@
     "url": "git+https://github.com/JWE24-code/dsh-tui-app.git"
   },
   "bin": {
-    "dsh-tui-app": "bin/dsh-tui-app.mjs"
+    "dsh-tui": "bin/dsh-tui.mjs"
   },
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",

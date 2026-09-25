@@ -17,10 +17,10 @@
 
 - insert:
     - id: tui-startup
-      name: '@jwe24-code/dsh-tui-app/startup'
+      name: '@jwe24-code/dsh-tui/startup'
 
     - id: tui-app
-      name: '@jwe24-code/dsh-tui-app'
+      name: '@jwe24-code/dsh-tui'
       inject: [tuiStartup]
       config:
         resumeSessionId: !!js ctx.tuiStartup.resumeSessionId
