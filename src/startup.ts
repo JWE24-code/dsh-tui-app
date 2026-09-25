@@ -39,6 +39,10 @@ export interface TuiStartupValues {
   restore: boolean
   /** Devices to include in the fleet overview; empty means this one only. */
   peers: string[]
+  /** Whisper weights for push-to-talk; absent falls back to the default search. */
+  voiceModel: string | undefined
+  /** Whisper executable for push-to-talk; absent looks for the known names. */
+  voiceBin: string | undefined
 }
 
 /** This app's command grammar, help text, and examples. */
@@ -61,6 +65,8 @@ function tuiCommand(): Command {
       (value: string, previous: string[]) => [...previous, value],
       [],
     )
+    .option('--voice-model <path>', 'whisper.cpp weights for push-to-talk dictation (ctrl+v)')
+    .option('--voice-bin <path>', 'whisper.cpp executable to transcribe with; default searches PATH')
     .addHelpText(
       'after',
       `
@@ -93,6 +99,8 @@ export function apply(ctx: Context): void {
       bell?: boolean
       restore?: boolean
       peer?: string[]
+      voiceModel?: string
+      voiceBin?: string
     }>()
 
     if (options.resume !== undefined && options.resume.trim() === '') {
@@ -125,6 +133,10 @@ export function apply(ctx: Context): void {
       bell: options.bell !== false,
       restore: options.restore !== false,
       peers: options.peer ?? [],
+      // Left undefined the app reads DSH_TUI_WHISPER_MODEL / _BIN, then falls
+      // back to its own search, so passing nothing here is the normal case.
+      voiceModel: options.voiceModel,
+      voiceBin: options.voiceBin,
     } satisfies TuiStartupValues)
   })
   parseCmdline(ctx, program)

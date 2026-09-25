@@ -11,8 +11,8 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { homedir } from 'node:os'
-import { writeFile } from 'node:fs/promises'
+import { homedir, tmpdir } from 'node:os'
+import { unlink, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
@@ -55,6 +55,7 @@ import {
   maxScrollBack,
   render,
   type Snapshot,
+  type VoicePhase,
 } from './tui/view.ts'
 import { activeTheme, applyTheme, listThemes } from './tui/theme.ts'
 import { projectStreamChunk } from './tui/stream.ts'
@@ -84,6 +85,18 @@ import { VERSION } from './version.ts'
 import { FleetView, jumpCommand, mergeFleet } from './tui/fleet.ts'
 import { PresencePublisher, type PresenceInput } from './presence.ts'
 import { collectFleet, localDshHome, type PeerConfig } from './fleet-sources.ts'
+import {
+  insertionFor,
+  resolveVoiceSetup,
+  startRecording,
+  stopRecording,
+  systemProbe,
+  transcribe,
+  voiceGapMessage,
+  voiceOptionsFromEnv,
+  type Recording,
+  type VoiceSetup,
+} from './voice.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'dsh-tui-app'
@@ -108,6 +121,10 @@ export interface Config {
   peers?: string[]
   /** Reopen the sessions that were open at the last exit; on by default. */
   restore?: boolean
+  /** Whisper weights for push-to-talk; absent falls back to the default search. */
+  voiceModel?: string
+  /** Whisper executable for push-to-talk; absent looks for the known names. */
+  voiceBin?: string
 }
 
 export const Config: z<Config> = z.object({
@@ -119,6 +136,8 @@ export const Config: z<Config> = z.object({
   bell: z.boolean(),
   peers: z.array(z.string()),
   restore: z.boolean(),
+  voiceModel: z.string(),
+  voiceBin: z.string(),
 })
 
 /** Spinner frames for the streaming indicator. */
@@ -294,6 +313,18 @@ class TuiApp {
   private presenceKey = ''
   /** Working directory the sessions were created in, reported in presence. */
   private cwd = process.cwd()
+
+  /**
+   * Push-to-talk state.
+   *
+   * `voicePhase` is what the footer draws and `voiceRecording` is the process
+   * behind it. They are separate because transcription outlives the recorder:
+   * the phase is still `transcribing` long after the child has exited.
+   */
+  private voicePhase: VoicePhase | undefined
+  private voiceRecording: Recording | undefined
+  /** Resolved once per take, so the transcriber uses what the recorder used. */
+  private voiceSetup: VoiceSetup | undefined
 
   private abort: AbortController | undefined
   private disposers: (() => void)[] = []
@@ -494,6 +525,9 @@ class TuiApp {
     if (this.stopped) return
     this.stopped = true
     this.stopSpinner()
+    // A recorder left running would keep the microphone open after the app
+    // it belonged to is gone, with nothing on screen to say so.
+    if (this.voiceRecording !== undefined) this.cancelVoice()
     this.persistNow()
     // Drop this device's presence records so it does not linger as stale.
     this.presence.stop()
@@ -817,6 +851,7 @@ class TuiApp {
       confirmText: this.confirming ? this.confirmPrompt : undefined,
       searchActive: this.search !== undefined,
       fleet: this.fleet,
+      voice: this.voicePhase,
     }
   }
 
@@ -849,6 +884,158 @@ class TuiApp {
     if (this.spinnerTimer === undefined) return
     clearInterval(this.spinnerTimer)
     this.spinnerTimer = undefined
+  }
+
+  /**
+   * Stop the spinner only once nothing on screen still needs it.
+   *
+   * Two independent things animate it now — a streaming reply and a live
+   * microphone — and either one finishing used to be enough to freeze the
+   * other's indicator mid-frame.
+   */
+  private releaseSpinner(): void {
+    if (this.voicePhase !== undefined) return
+    if (this.tabs.some((open) => open.streaming)) return
+    this.stopSpinner()
+  }
+
+  // ---------------------------------------------------------------- voice
+
+  /**
+   * The push-to-talk key: one press arms the microphone, the next transcribes.
+   *
+   * Hold-to-talk would be the obvious shape but a terminal cannot see a key
+   * being released, so the two-press toggle is the only honest version of it.
+   */
+  private toggleVoice(): void {
+    if (this.voicePhase === 'transcribing') {
+      this.setStatus('still transcribing the last take')
+      this.paint()
+      return
+    }
+    if (this.voiceRecording !== undefined) {
+      void this.finishVoice()
+      return
+    }
+    this.beginVoice()
+  }
+
+  /**
+   * Start capturing, or say in one line why this machine cannot.
+   *
+   * Every failure here is a missing optional dependency rather than a fault,
+   * so none of it is allowed to throw: the key press turns into a footer
+   * message and the app carries on exactly as if voice did not exist.
+   */
+  private beginVoice(): void {
+    const resolution = resolveVoiceSetup(
+      {
+        ...voiceOptionsFromEnv(),
+        model: this.config.voiceModel,
+        binary: this.config.voiceBin,
+      },
+      systemProbe(),
+    )
+    if (!resolution.ok) {
+      this.setStatus(voiceGapMessage(resolution.gap), true)
+      this.paint()
+      return
+    }
+
+    const wavPath = join(tmpdir(), `dsh-tui-voice-${randomUUID()}.wav`)
+    try {
+      this.voiceRecording = startRecording(resolution.setup, wavPath)
+    } catch (error) {
+      this.setStatus(`recorder failed: ${describeError(error)}`, true)
+      this.paint()
+      return
+    }
+
+    // A recorder that dies on its own — no such device, a busy card — must not
+    // leave the footer claiming the microphone is live forever.
+    this.voiceRecording.child.once('error', (error: Error) => {
+      if (this.voicePhase !== 'recording') return
+      this.voicePhase = undefined
+      this.voiceRecording = undefined
+      this.releaseSpinner()
+      this.setStatus(`recorder failed: ${error.message}`, true)
+      this.paint()
+    })
+
+    this.voiceSetup = resolution.setup
+    this.voicePhase = 'recording'
+    this.setStatus('')
+    this.startSpinner()
+    this.paint()
+  }
+
+  /**
+   * Stop the recorder, run whisper, and splice the result into the composer.
+   *
+   * Nothing is sent: a misheard prompt that submits itself is worse than no
+   * dictation at all, so the transcript lands at the cursor and the person
+   * reads it before pressing enter. Both halves are awaited off the keypress,
+   * so the screen keeps repainting and the spinner keeps turning throughout.
+   */
+  private async finishVoice(): Promise<void> {
+    const recording = this.voiceRecording
+    const setup = this.voiceSetup
+    if (recording === undefined || setup === undefined) return
+    this.voiceRecording = undefined
+    this.voicePhase = 'transcribing'
+    this.setStatus('')
+    this.paint()
+
+    try {
+      await stopRecording(recording)
+      const text = await transcribe(setup, recording.wavPath)
+      // The take may have been abandoned while whisper was still thinking.
+      if (this.voicePhase !== 'transcribing') return
+      const insertion = insertionFor(this.composer.value(), this.composer.position(), text)
+      if (insertion === '') {
+        this.setStatus('heard nothing')
+      } else {
+        this.history.reset()
+        this.composer.insert(insertion)
+        this.setStatus('transcribed — edit it, then enter to send')
+      }
+    } catch (error) {
+      this.setStatus(describeError(error), true)
+    } finally {
+      if (this.voicePhase === 'transcribing') this.voicePhase = undefined
+      this.releaseSpinner()
+      void unlink(recording.wavPath).catch(() => {
+        // A stray temp wav is untidy, not a failure worth reporting.
+      })
+      this.paint()
+    }
+  }
+
+  /**
+   * Throw the take away.
+   *
+   * `esc` has to reach the microphone before it reaches anything else on
+   * screen: a live recording is the most modal thing the app ever does, and
+   * the one state a person most urgently wants out of.
+   */
+  private cancelVoice(): void {
+    const recording = this.voiceRecording
+    this.voiceRecording = undefined
+    this.voiceSetup = undefined
+    this.voicePhase = undefined
+    this.releaseSpinner()
+    if (recording !== undefined) {
+      try {
+        recording.child.kill('SIGKILL')
+      } catch {
+        // Already gone.
+      }
+      void unlink(recording.wavPath).catch(() => {
+        // Best-effort; the file is in the system temp directory either way.
+      })
+    }
+    this.setStatus('recording discarded')
+    this.paint()
   }
 
   // ---------------------------------------------------------------- fleet
@@ -1102,7 +1289,10 @@ class TuiApp {
         return
 
       case 'esc':
-        if (this.palette.open) this.palette.close()
+        // A live microphone outranks everything else esc can dismiss: it is
+        // the most modal state the app has, and the one to get out of first.
+        if (this.voicePhase !== undefined) this.cancelVoice()
+        else if (this.palette.open) this.palette.close()
         else if (this.overlay !== '') this.overlay = ''
         else if (this.search !== undefined) this.clearSearch()
         else if (this.tab.streaming) this.interrupt()
@@ -1207,6 +1397,10 @@ class TuiApp {
 
       case 'ctrl+f':
         this.openFleet()
+        break
+
+      case 'ctrl+v':
+        this.toggleVoice()
         break
 
       case 'left':
@@ -1636,7 +1830,7 @@ class TuiApp {
       this.abort = undefined
       tab.streaming = false
       tab.streamStartedAt = 0
-      if (!this.tabs.some((open) => open.streaming)) this.stopSpinner()
+      this.releaseSpinner()
       // Commit whatever streamed, even on an interrupt, so nothing is lost.
       const content = tab.streamingText.trim()
       const reasoning = tab.streamingReasoning.trim()
