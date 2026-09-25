@@ -33,7 +33,7 @@
     "typecheck": "tsc -p tsconfig.typecheck.json",
     "link-types": "node scripts/link-harness-types.mjs",
     "install-profile": "node scripts/install-profile.mjs",
-    "test": "node --experimental-strip-types tests/render-smoke.ts && node --experimental-strip-types tests/queue-smoke.ts && node --experimental-strip-types tests/persist.ts && node --experimental-strip-types tests/stream-smoke.ts && node --experimental-strip-types tests/export-smoke.ts && node --experimental-strip-types tests/sessions-store-smoke.ts && node --experimental-strip-types tests/fleet-smoke.ts && node --experimental-strip-types tests/patch-smoke.ts && node --experimental-strip-types tests/pty.ts",
+    "test": "node --experimental-strip-types tests/render-smoke.ts && node --experimental-strip-types tests/queue-smoke.ts && node --experimental-strip-types tests/persist.ts && node --experimental-strip-types tests/stream-smoke.ts && node --experimental-strip-types tests/export-smoke.ts && node --experimental-strip-types tests/sessions-store-smoke.ts && node --experimental-strip-types tests/fleet-smoke.ts && node --experimental-strip-types tests/theme-smoke.ts && node --experimental-strip-types tests/patch-smoke.ts && node --experimental-strip-types tests/pty.ts",
     "preview": "node --experimental-strip-types tests/preview.ts",
     "test:pty": "node --experimental-strip-types tests/pty.ts"
   },

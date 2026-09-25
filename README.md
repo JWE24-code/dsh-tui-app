@@ -119,7 +119,7 @@ overrides background detection; `NO_COLOR` disables styling.
 | `alt+b`/`alt+f`, `ctrl+←`/`ctrl+→` | Word motion · `delete` deletes forward |
 | `ctrl+c` | Sessions menu · press again within 1.5s to quit |
 
-In a list (`/model`, `/resume`): type to filter, `enter` selects, `esc` closes;
+In a list (`/model`, `/theme`, `/resume`): type to filter, `enter` selects, `esc` closes;
 `ctrl+n`/`ctrl+p` or the arrows move, `pgup`/`pgdn` move by ten, `home`/`end`
 jump, and `ctrl+u` clears the filter.
 
@@ -172,8 +172,8 @@ Very long answers are truncated to what the terminal is willing to accept.
 
 ## What persists
 
-Sent prompts and the thinking preference are saved to
-`$DSH_HOME/tui-state.json` (`$DSH_HOME` defaults to `~/.dsh`) and restored on
+Sent prompts, the thinking preference, and the chosen color palette are saved
+to `$DSH_HOME/tui-state.json` (`$DSH_HOME` defaults to `~/.dsh`) and restored on
 the next launch. The model choice is saved through the Harness's own
 `saveSelection`, not this file. Writing is atomic and best-effort: a read-only
 home means the app runs exactly as before, just without recall across
@@ -301,6 +301,35 @@ model and context bar always describe the session on screen. A new session
 starts from the model of the session it was opened from, then diverges
 independently.
 
+## Color palettes
+
+`/theme` opens a picker over the palettes the app ships with; `/theme <name>`
+switches straight away.
+
+| Theme | |
+|---|---|
+| `rose-pine` | the default — muted purples on a soft ink background |
+| `gruvbox` | warm retro earth tones, medium contrast |
+| `nord` | cool arctic blues, low saturation |
+| `solarized` | Schoonover's balanced pairing |
+| `mono` | greyscale, maximum contrast, no color coding at all |
+
+Every palette defines both a light and a dark variant, because *which* palette
+is in force and *which background* it is drawn against are separate questions.
+`DSH_TUI_THEME=light|dark` still forces the variant (the `COLORFGBG`
+convention decides otherwise, and dark is the fallback), and `NO_COLOR` or
+`TERM=dumb` still turns color off entirely — under those the theme has nothing
+to do and picking one changes nothing.
+
+`mono` is the accessibility option: it drops the hues rather than trying to
+keep them, so success and failure no longer differ by color. Nothing in the
+app relies on color alone — a failed tool call prints `✗` and its error text
+either way — so what is left is legible where a hue-based palette is not.
+
+The choice is saved with the rest of the durable state and applied before the
+first frame, so it survives a restart. Switching repaints the whole screen at
+once, since a palette change moves the color of nearly every cell.
+
 ## Commands
 
 The palette merges two sources, so it shows whatever the Harness has actually
@@ -310,7 +339,7 @@ alongside the app's own:
 | Command | Owner |
 |---|---|
 | `/compact`, and any other plugin command | `ctx.commands` (the Harness registry) |
-| `/new`, `/sessions`, `/close`, `/resume`, `/delete`, `/model`, `/thinking`, `/tools`, `/export`, `/find`, `/unqueue`, `/copy`, `/about`, `/help`, `/exit` (`/quit`) | this app |
+| `/new`, `/sessions`, `/close`, `/resume`, `/delete`, `/model`, `/theme`, `/thinking`, `/tools`, `/export`, `/find`, `/unqueue`, `/copy`, `/about`, `/help`, `/exit` (`/quit`) | this app |
 
 Unknown commands are dispatched to `ctx.commands.execute()` and only reported
 as unknown if the registry also rejects them.
@@ -350,6 +379,7 @@ src/
     markdown.ts    markdown to ANSI plus a small syntax highlighter
     text.ts        ANSI-aware width, wrap, truncate
     theme.ts       adaptive palette and SGR styling
+    themes.ts      the named palettes /theme chooses between
 ```
 
 `src/tui/` imports nothing from the Harness and nothing from npm, which is why
@@ -358,7 +388,7 @@ it can be tested without a profile.
 ## Tests
 
 ```sh
-npm test        # render + queue + persist + stream + pty (368 + 8 + 13 + 20 + 13)
+npm test        # render, queue, persist, stream, export, sessions, fleet, theme, patch, pty
 npm run test:pty   # just the pty round trip, for a quick loop (needs script(1))
 node --experimental-strip-types tests/preview.ts [normal|palette|picker|stream|think]
 ```
@@ -368,8 +398,12 @@ the invariants the screen driver depends on: the frame never exceeds the
 window, no line exceeds the width, and the cursor always lands inside the
 composer. It also exercises the input-history recall and transcript-search
 matching; sibling scripts cover queue rendering, the persistence round-trip
-against a temporary `$DSH_HOME`, and the stream projection (a synthetic model
-reply replayed through `tui/stream.ts`). The pty harness drives the real
+against a temporary `$DSH_HOME`, the stream projection (a synthetic model
+reply replayed through `tui/stream.ts`), and the color palettes — every theme
+is checked for ten well-formed colors in both variants, `/theme` is checked to
+actually change the bytes `style()` emits and to restore the default exactly,
+and a child process re-runs the suite under `NO_COLOR` to prove it still
+suppresses everything. The pty harness drives the real
 `Screen`, key decoding, and frame renderer through an actual pseudo-terminal —
 raw mode, the alternate screen, split escape sequences, and the two-step
 ctrl+c — so the terminal layer is proven by a round trip, not types alone.

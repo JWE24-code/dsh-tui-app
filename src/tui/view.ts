@@ -512,7 +512,9 @@ function pickerPane(snapshot: Snapshot, geometry: Layout): string[] {
 
   const out = [...head, ...visible]
   while (out.length < height - 1) out.push('')
-  const action = picker.kind === 'models' ? 'select' : picker.kind === 'delete' ? 'delete' : 'open'
+  const action = picker.kind === 'models' || picker.kind === 'themes'
+    ? 'select'
+    : picker.kind === 'delete' ? 'delete' : 'open'
   const count = `${matches.length}/${picker.items.length}`
   out.push(
     muted(`↑↓ move  ·  enter ${action}  ·  esc back`) +
@@ -851,14 +853,22 @@ export function render(snapshot: Snapshot): {
   return { lines, cursor }
 }
 
-/** The help text shown by `/help`, rendered as markdown in the transcript pane. */
+/**
+ * The help text shown by `/help`, rendered as markdown in the transcript pane.
+ *
+ * It is longer than a default 80x24 window, and the overlay shows the *tail*
+ * of it, so the list has a budget: every line added here pushes one off the
+ * top, and what falls off first is the session keys. A new section therefore
+ * comes with an equal number of lines folded together further down — which is
+ * why several entries below read as two keys on one row.
+ */
 export const HELP_TEXT = [
   '**Keys**',
   '',
   '- `enter` — send · queues while a reply streams · `ctrl+j` — newline',
   '- `↑` / `↓` on the first / last row — recall earlier prompts',
   '- `/` — command palette · `tab` accept · `esc` dismiss',
-  '- `esc` — interrupt a reply while it is streaming',
+  '- `esc` — clear a search, else interrupt a reply while it is streaming',
   '- `enter` while streaming queues the prompt · `/unqueue` discards it',
   '- `ctrl+n` — new session · `ctrl+r` — resume · `ctrl+t` — toggle thinking',
   '- `pgup` / `pgdn` — page · `ctrl+u` / `ctrl+d` — half page',
@@ -877,26 +887,25 @@ export const HELP_TEXT = [
   '- `ctrl+a` / `ctrl+e` — start / end of line · `ctrl+w` — delete word',
   '- `ctrl+c` — sessions menu · again within 1.5s — quit',
   '',
-  '**Fleet** (`ctrl+f`, `/fleet`)',
+  '**Fleet** (`ctrl+f`, `/fleet`) — every device running this app, by machine',
   '',
-  '- every device that runs this app, grouped by machine',
-  '- `↑` / `↓` or `j` / `k` — move · `r` — refresh · `esc` — back',
-  '- `enter` — open a session here, or copy the `ssh` command that reaches it',
+  '- `↑` / `↓` or `j` / `k` — move · `r` — refresh · `esc` — back · `enter` — open',
+  '- a session on another device copies the `ssh` command that reaches it',
   '- add devices with `--peer <host>`; each is read over SSH, nothing listens',
   '',
   '**Searching**',
   '',
-  '- `/find <text>` — search the transcript · `esc` clears the search first',
-  '- `n` / `N` (with an empty composer) — next / previous match',
+  '- `/find <text>` — search · `n` / `N` on an empty composer — next / previous',
   '',
-  '**In a list** (`/model`, `/resume`)',
+  '**Appearance**',
   '',
-  '- type to filter · `backspace` narrows back · `ctrl+u` clears',
-  '- `enter` selects · `esc` closes · the dot marks what is in use',
+  '- `/theme` — pick a color palette · `mono` is greyscale and high contrast',
+  '',
+  '**In a list** (`/model`, `/theme`, `/resume`)',
+  '',
+  '- type to filter · `ctrl+u` clears · `enter` selects · `esc` closes · ● in use',
   '',
   '**Commands**',
   '',
-  'Type `/` to see every command the harness has registered, including the',
-  'ones its own plugins add. Sessions, compaction and tool policy all live in',
-  'the harness, so they follow you between surfaces.',
+  'Type `/` for every command the harness has registered, its own plugins too.',
 ].join('\n')

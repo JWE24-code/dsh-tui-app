@@ -1,12 +1,19 @@
 /**
  * Palette and text styling for the terminal app.
  *
- * The colors are the Rose Pine-ish pair the original Go client used, kept as
- * explicit light/dark variants so the app reads on either terminal background.
- * Everything emits truecolor SGR directly: the app already owns the screen, so
- * there is no styling library between it and the escape codes.
+ * The colors default to the Rose Pine-ish pair the original Go client used,
+ * kept as explicit light/dark variants so the app reads on either terminal
+ * background. Everything emits truecolor SGR directly: the app already owns
+ * the screen, so there is no styling library between it and the escape codes.
+ *
+ * Which palette is in force is swappable at runtime — see {@link applyTheme}
+ * and the table in `themes.ts`. That is deliberately orthogonal to the
+ * light/dark question: a theme supplies both variants, and the terminal's own
+ * background still decides which of the two is drawn.
  * @module
  */
+
+import { DEFAULT_PALETTE, DEFAULT_THEME, findTheme, THEMES, type Theme } from './themes.ts'
 
 /** One color with a variant per terminal background. */
 export interface AdaptiveColor {
@@ -14,16 +21,83 @@ export interface AdaptiveColor {
   dark: string
 }
 
-export const colAccent: AdaptiveColor = { light: '#7A3E9D', dark: '#C4A7E7' }
-export const colMuted: AdaptiveColor = { light: '#6B6B6B', dark: '#6E6A86' }
-export const colBorder: AdaptiveColor = { light: '#D0CCD8', dark: '#393552' }
-export const colText: AdaptiveColor = { light: '#1F1D2E', dark: '#E0DEF4' }
-export const colWarn: AdaptiveColor = { light: '#B4637A', dark: '#EB6F92' }
-export const colOK: AdaptiveColor = { light: '#286983', dark: '#9CCFD8' }
-export const colGreen: AdaptiveColor = { light: '#56949F', dark: '#3E8FB0' }
-export const colGold: AdaptiveColor = { light: '#EA9D34', dark: '#F6C177' }
-export const colRose: AdaptiveColor = { light: '#D7827E', dark: '#EA9A97' }
-export const colInvert: AdaptiveColor = { light: '#FFFFFF', dark: '#191724' }
+/**
+ * Copy a palette entry into a fresh object.
+ *
+ * The exported constants have to be objects this module owns, not the table's
+ * own, because {@link applyTheme} writes through them — sharing them with the
+ * table would let one theme switch overwrite the palette it came from.
+ */
+function seed(color: AdaptiveColor): AdaptiveColor {
+  return { light: color.light, dark: color.dark }
+}
+
+export const colAccent: AdaptiveColor = seed(DEFAULT_PALETTE.accent)
+export const colMuted: AdaptiveColor = seed(DEFAULT_PALETTE.muted)
+export const colBorder: AdaptiveColor = seed(DEFAULT_PALETTE.border)
+export const colText: AdaptiveColor = seed(DEFAULT_PALETTE.text)
+export const colWarn: AdaptiveColor = seed(DEFAULT_PALETTE.warn)
+export const colOK: AdaptiveColor = seed(DEFAULT_PALETTE.ok)
+export const colGreen: AdaptiveColor = seed(DEFAULT_PALETTE.green)
+export const colGold: AdaptiveColor = seed(DEFAULT_PALETTE.gold)
+export const colRose: AdaptiveColor = seed(DEFAULT_PALETTE.rose)
+export const colInvert: AdaptiveColor = seed(DEFAULT_PALETTE.invert)
+
+/** Which palette {@link applyTheme} last installed. */
+let active = DEFAULT_THEME
+
+/**
+ * Install a named palette, returning false when there is no such theme.
+ *
+ * Every other module imported the color constants by name, so the switch has
+ * to happen *through* those objects rather than by replacing them: an import
+ * binding points at the object that existed when the module was evaluated,
+ * and reassigning the constant here would leave every call site drawing with
+ * the old palette. Writing the two fields in place is what makes a theme
+ * change a one-line operation instead of a rewrite of every view.
+ *
+ * An unknown name is reported rather than thrown: it arrives from `/theme
+ * <name>` or from a state file written by a future version, and neither is a
+ * reason to take the app down.
+ */
+export function applyTheme(name: string): boolean {
+  const theme = findTheme(name)
+  if (theme === undefined) return false
+  const pairs: [AdaptiveColor, AdaptiveColor][] = [
+    [colAccent, theme.colors.accent],
+    [colMuted, theme.colors.muted],
+    [colBorder, theme.colors.border],
+    [colText, theme.colors.text],
+    [colWarn, theme.colors.warn],
+    [colOK, theme.colors.ok],
+    [colGreen, theme.colors.green],
+    [colGold, theme.colors.gold],
+    [colRose, theme.colors.rose],
+    [colInvert, theme.colors.invert],
+  ]
+  for (const [target, source] of pairs) {
+    target.light = source.light
+    target.dark = source.dark
+  }
+  active = theme.name
+  return true
+}
+
+/** The name of the palette currently installed. */
+export function activeTheme(): string {
+  return active
+}
+
+/** Every palette {@link applyTheme} will accept, in the order to list them. */
+export function listThemes(): readonly Theme[] {
+  return THEMES
+}
+
+/**
+ * Re-exported so a caller that only wants to list or name a palette imports
+ * this module alone, the way every drawing module already does.
+ */
+export type { Theme, ThemePalette } from './themes.ts'
 
 /**
  * Whether this terminal is being treated as dark. `DSH_TUI_THEME` wins; the
@@ -48,7 +122,11 @@ function detectDark(): boolean {
 
 let dark = detectDark()
 
-/** Re-read the environment, so a theme change applies without a restart. */
+/**
+ * Re-read the environment, so a change of terminal background applies without
+ * a restart. This is about the light/dark variant only — the choice of
+ * palette is {@link applyTheme}'s.
+ */
 export function refreshTheme(): void {
   dark = detectDark()
 }

@@ -19,6 +19,8 @@ export interface PersistedState {
   inputHistory: string[]
   /** Whether reasoning output was visible when the app last ran. */
   thinking: boolean
+  /** Name of the chosen color palette; absent means the app's default. */
+  theme?: string
 }
 
 /** Version of the on-disk shape, so a future change can migrate or discard. */
@@ -57,6 +59,7 @@ export async function loadState(
         ? parsed.inputHistory.filter((entry): entry is string => typeof entry === 'string')
         : [],
       thinking: parsed.thinking === true,
+      theme: typeof parsed.theme === 'string' ? parsed.theme : undefined,
     }
   } catch {
     return fallback

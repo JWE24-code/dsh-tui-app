@@ -8,6 +8,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Selectable color palettes** — `/theme` opens a picker over `rose-pine`
+  (the default, unchanged), `gruvbox`, `nord`, `solarized`, and `mono`;
+  `/theme <name>` switches straight away. Each palette ships both a light and
+  a dark variant, so `DSH_TUI_THEME=light|dark` still picks the variant and
+  `NO_COLOR` still turns color off entirely. `mono` is greyscale and high
+  contrast for anyone the hue-based palettes fail. The choice is saved to
+  `$DSH_HOME/tui-state.json` and restored before the first frame.
+
 - **Fleet overview** — `ctrl+f` or `/fleet` lists every dsh session across every
   device in one place, grouped by machine and ranked by urgency, with a live
   status mark and the age of each heartbeat. Each device publishes one small

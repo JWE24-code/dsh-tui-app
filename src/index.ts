@@ -50,6 +50,7 @@ import {
   render,
   type Snapshot,
 } from './tui/view.ts'
+import { activeTheme, applyTheme, listThemes } from './tui/theme.ts'
 import { projectStreamChunk } from './tui/stream.ts'
 import { transcriptMarkdown } from './tui/export.ts'
 import { deleteStoredSessionDir, findStoredSessionDir } from './sessions-store.ts'
@@ -115,6 +116,7 @@ const BUILTIN_COMMANDS: readonly PaletteCommand[] = [
   { name: 'resume', args: '', description: 'Pick up an earlier session' },
   { name: 'delete', args: '', description: 'Delete a stored session for good' },
   { name: 'model', args: '[name]', description: 'Switch model; no argument lists them' },
+  { name: 'theme', args: '[name]', description: 'Switch the color palette; no argument lists them' },
   { name: 'thinking', args: '', description: "Toggle display of the reasoner's chain-of-thought" },
   { name: 'tools', args: '', description: 'List the tools this agent can call' },
   { name: 'export', args: '[file]', description: 'Write this transcript to a markdown file' },
@@ -294,6 +296,7 @@ class TuiApp {
     this.persisted = await loadState()
     this.history.load(this.persisted.inputHistory)
     if (this.config.thinking === undefined) this.showThinking = this.persisted.thinking
+    if (this.persisted.theme !== undefined) applyTheme(this.persisted.theme)
 
     const selection = defaultModel.currentSelection()
     this.tab.selection.current =
@@ -940,6 +943,7 @@ class TuiApp {
         this.picker.hide()
         if (item === undefined) break
         if (kind === 'models') void this.switchModel(item)
+        else if (kind === 'themes') this.selectTheme(item.id)
         else if (kind === 'open') {
           if (item.id === NEW_SESSION_ROW) void this.newSession()
           else this.selectSession(Number.parseInt(item.id, 10))
@@ -1239,7 +1243,11 @@ class TuiApp {
 
   /** Write the durable state immediately, ignoring a failing backend. */
   private persistNow(): void {
-    this.persisted = { inputHistory: [...this.history.snapshot()], thinking: this.showThinking }
+    this.persisted = {
+      inputHistory: [...this.history.snapshot()],
+      thinking: this.showThinking,
+      theme: activeTheme(),
+    }
     // Synchronous on purpose: this runs on the quit path, where an async write
     // would be abandoned the moment `exit(0)` tears the process down.
     saveStateSync(this.persisted)
@@ -1557,6 +1565,12 @@ class TuiApp {
         return
       }
 
+      case 'theme': {
+        if (rawInput.trim() === '') this.showThemes()
+        else this.selectTheme(rawInput.trim())
+        return
+      }
+
       case 'thinking':
         this.showThinking = !this.showThinking
         this.persistSoon()
@@ -1835,6 +1849,45 @@ class TuiApp {
       this.setStatus(`model → ${row.model} (not saved: ${describeError(error)})`, true)
       this.paint()
     }
+  }
+
+  /**
+   * Open the palette picker. The rows come straight from the theme table, so
+   * a palette added there shows up here with no further wiring.
+   */
+  private showThemes(): void {
+    const current = activeTheme()
+    const rows: PickerItem[] = listThemes().map((theme) => ({
+      id: theme.name,
+      title: theme.name,
+      subtitle: theme.description,
+      active: theme.name === current,
+    }))
+    this.picker.show('themes', 'Themes', rows)
+    // Start on the palette in use, so esc and enter are both a no-op.
+    this.picker.selectById(current)
+    this.setStatus('')
+    this.paint()
+  }
+
+  /**
+   * Install a palette by name and redraw.
+   *
+   * A palette change moves the color of nearly every cell, and the screen
+   * driver only rewrites lines whose text it has seen change — so the cache
+   * has to be dropped explicitly or the old colors stay on screen until
+   * something else happens to touch those rows.
+   */
+  private selectTheme(name: string): void {
+    if (!applyTheme(name)) {
+      this.setStatus(`unknown theme ${name} — /theme lists them`, true)
+      this.paint()
+      return
+    }
+    this.persistSoon()
+    this.setStatus(`theme → ${activeTheme()}`)
+    this.screen.invalidate()
+    this.paint()
   }
 
   /** Open a picker over the sessions already open in this app. */
