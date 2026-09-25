@@ -11,7 +11,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { homedir, tmpdir } from 'node:os'
 import { readFile, unlink, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, resolve } from 'node:path'
@@ -2644,6 +2644,13 @@ class TuiApp {
       // `ESC ] 52 ; c ; <base64> ST` — the standard form every mainstream
       // terminal accepts. Written directly, then the next paint redraws.
       process.stdout.write(`\u001b]52;c;${clipped}\u001b\\`)
+      // OSC 52 is the only channel that survives SSH and tmux, so it is always
+      // written. It is not sufficient on its own: a Wayland compositor only
+      // lets a window own the clipboard while it holds an input-focus serial,
+      // so the escape can be well-formed, accepted by the terminal, and still
+      // leave the clipboard untouched. Where a local helper exists it is what
+      // actually lands, so it is used as well — same text, last writer wins.
+      copyWithLocalHelper(text)
       return { ok: true, truncated: encoded.length > cap }
     } catch (error) {
       return { ok: false, truncated: false, error: describeError(error) }
@@ -4200,6 +4207,50 @@ async function listSessions(query: SessionQueryLike): Promise<PickerItem[]> {
     const subtitle = typeof when === 'number' ? relativeTime(when) : ''
     return { id, title, subtitle }
   }).filter((item) => item.id !== '')
+}
+
+/**
+ * Hand the text to the desktop's own clipboard helper, when there is one.
+ *
+ * This is the companion to OSC 52, not a replacement: the escape is what works
+ * over SSH and inside tmux, where no local helper can reach the clipboard the
+ * user is actually looking at. Locally the reverse holds — a Wayland
+ * compositor grants clipboard ownership only against an input-focus serial, so
+ * a terminal can accept the escape and still not own the selection.
+ *
+ * Best effort by design: a missing helper, a sandbox with no display, or a
+ * helper that exits non-zero all leave OSC 52 as the result, and none of them
+ * are worth interrupting a copy to report.
+ */
+function copyWithLocalHelper(text: string): boolean {
+  const wayland = process.env['WAYLAND_DISPLAY'] !== undefined
+  const x11 = process.env['DISPLAY'] !== undefined
+  const candidates: [string, string[]][] = [
+    ...(wayland ? ([['wl-copy', []]] as [string, string[]][]) : []),
+    ...(x11
+      ? ([
+          ['xclip', ['-selection', 'clipboard']],
+          ['xsel', ['--clipboard', '--input']],
+        ] as [string, string[]][])
+      : []),
+    ['pbcopy', []],
+  ]
+
+  for (const [command, args] of candidates) {
+    try {
+      const run = spawnSync(command, args, {
+        input: text,
+        // The helper must never inherit the terminal: wl-copy stays resident to
+        // serve the selection, and a shared stdout would corrupt the frame.
+        stdio: ['pipe', 'ignore', 'ignore'],
+        timeout: 2000,
+      })
+      if (run.error === undefined && run.status === 0) return true
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return false
 }
 
 /** A compact "3h ago" label for the picker's right column. */

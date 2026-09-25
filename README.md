@@ -248,10 +248,20 @@ reply still streaming in simply adds lines to search rather than going stale.
 
 ## Copying an answer
 
-`/copy` (or `ctrl+y`) yanks the last reply to the system clipboard over the
-OSC 52 escape — the one clipboard channel a terminal owns. It needs no
-dependency and no external process, so it works over SSH and inside tmux.
-Very long answers are truncated to what the terminal is willing to accept.
+`/copy` (or `ctrl+y`) yanks the last reply to the system clipboard, and
+`alt+↑`/`alt+↓` then `alt+c` copies any turn you select. Very long answers are
+truncated to what the terminal is willing to accept.
+
+Two channels are used, because neither is sufficient alone. The OSC 52 escape
+is the one a terminal owns: no dependency, no external process, and it is what
+survives SSH and tmux, where nothing running locally can reach the clipboard
+you are actually looking at. But a Wayland compositor grants clipboard
+ownership only against an input-focus serial, so a terminal can accept a
+perfectly well-formed escape and still leave the selection untouched — the copy
+reports success and nothing is on the clipboard. So when a local helper is
+present (`wl-copy`, `xclip`, `xsel`, `pbcopy`) the text goes there too, and
+that is the one that lands on a desktop. A missing helper is not an error; it
+just leaves OSC 52 to do the job it is good at.
 
 ## Dictating with your voice
 

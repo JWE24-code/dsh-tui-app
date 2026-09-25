@@ -162,6 +162,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Copying a turn said it worked and put nothing on the clipboard.** `alt+c`
+  (and `/copy`, `ctrl+y`) wrote a well-formed OSC 52 escape and reported
+  success, but on Wayland the clipboard stayed untouched: a compositor grants
+  clipboard ownership only against an input-focus serial, so the terminal can
+  accept the escape and still not own the selection. OSC 52 is still always
+  written — it is the only channel that survives SSH and tmux — and the text is
+  now also handed to a local helper when one exists (`wl-copy`, `xclip`,
+  `xsel`, `pbcopy`), which is what actually lands on a desktop. A missing
+  helper is not an error.
+
 - **Every prompt was sent blank.** On the plain `enter` path the composer was
   reset *before* `materializePrompt()` read it, so the draft was collected from
   an already-empty composer: the transcript committed a turn with no text (a
