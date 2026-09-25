@@ -102,6 +102,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Tool calls are expanded by default** — the transcript lists every tool
+  call as it happens, with its detail line, instead of summarizing them
+  behind a running counter. `ctrl+o` still collapses the pile into one line
+  per turn, and the choice is remembered in `$DSH_HOME/tui-state.json` and
+  restored on launch.
 - **Two-step `ctrl+c`** — the first press opens the sessions menu instead of
   quitting; a second press within 1.5 seconds exits. A stray ctrl+c no longer
   throws away the whole session.

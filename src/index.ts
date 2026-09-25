@@ -289,7 +289,8 @@ class TuiApp {
   private confirming = false
   private confirmPrompt = ''
   private confirmAction: (() => void) | undefined
-  private expandTools = false
+  /** Expanded by default: the transcript lists every tool call as it happens. */
+  private expandTools = true
   private expandBackground = false
   /** Live agents other than the foreground one, keyed by session id. */
 
@@ -366,6 +367,7 @@ class TuiApp {
     this.history.load(this.persisted.inputHistory)
     if (this.config.thinking === undefined) this.showThinking = this.persisted.thinking
     if (this.persisted.theme !== undefined) applyTheme(this.persisted.theme)
+    if (this.persisted.expandTools !== undefined) this.expandTools = this.persisted.expandTools
 
     const selection = defaultModel.currentSelection()
     this.tab.selection.current =
@@ -1576,6 +1578,7 @@ class TuiApp {
       inputHistory: [...this.history.snapshot()],
       thinking: this.showThinking,
       theme: activeTheme(),
+      expandTools: this.expandTools,
       sessions: this.openSessions(),
       activeSession: this.activeSessionIndex(),
     }

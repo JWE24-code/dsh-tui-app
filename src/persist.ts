@@ -39,6 +39,11 @@ export interface PersistedState {
   thinking: boolean
   /** Name of the chosen color palette; absent means the app's default. */
   theme?: string
+  /**
+   * Whether tool calls were listed rather than summarized when the app last
+   * ran; absent means the default, which is to list them.
+   */
+  expandTools?: boolean
   /** Sessions that were open at the last exit, in tab order. */
   sessions: PersistedSession[]
   /** Index into {@link PersistedState.sessions} of the tab that was on screen. */
@@ -127,6 +132,7 @@ export function decodeState(raw: string): PersistedState {
       : [],
     thinking: parsed.thinking === true,
     theme: typeof parsed.theme === 'string' ? parsed.theme : undefined,
+    expandTools: parsed.expandTools === false ? false : undefined,
     sessions,
     activeSession,
   }
