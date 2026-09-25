@@ -60,7 +60,7 @@ const mixed = renderJobs(
   ],
   NOW,
 )
-const order = ['live', 'new', 'old'].map((id) => mixed.indexOf(id))
+const order = ['live', 'new', 'old'].map((id) => mixed.indexOf(id)) as [number, number, number]
 check('running jobs come before finished ones', order[0] < order[1])
 check('finished jobs are newest first', order[1] < order[2])
 check('the running section counts', mixed.includes('Running (1)'))
