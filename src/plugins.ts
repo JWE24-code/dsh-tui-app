@@ -28,7 +28,16 @@ import { join } from 'node:path'
 export const BASE_BUNDLE = '@deepseek-ai/dsh-base'
 
 /** This app's own package, as the profile's dependency list spells it. */
-export const APP_PACKAGE = 'dsh-tui-app'
+export const APP_PACKAGE = '@jwe24-code/dsh-tui-app'
+
+/**
+ * The name this package shipped under before the scoped rename.
+ *
+ * Profiles installed then still list it, and the app must keep recognizing its
+ * own bundle as protected — otherwise the pane offers to disable the terminal
+ * it is running inside.
+ */
+export const LEGACY_APP_PACKAGE = 'dsh-tui-app'
 
 /**
  * Packages the picker lists but refuses to change.
@@ -37,7 +46,7 @@ export const APP_PACKAGE = 'dsh-tui-app'
  * app removes the very screen the command was typed on — in both cases the
  * only way back is to hand-edit JSON, so the app does not offer the rope.
  */
-export const PROTECTED_PACKAGES: readonly string[] = [BASE_BUNDLE, APP_PACKAGE]
+export const PROTECTED_PACKAGES: readonly string[] = [BASE_BUNDLE, APP_PACKAGE, LEGACY_APP_PACKAGE]
 
 /** The package manager profiles are installed with. */
 export const PACKAGE_MANAGER = 'pnpm'

@@ -65,6 +65,7 @@ import { FileIndex } from './file-index.ts'
 import { TuiHost } from './tui-host.ts'
 import { forkCut, lineage, projectUserTurns, rewindTarget } from './rewind.ts'
 import { renderJobs, type JobLike } from './tui/jobs.ts'
+import { groupMcpTools, renderMcp } from './tui/mcp.ts'
 import { searchSessions, type SessionHit } from './cross-find.ts'
 import { sessionsRoot } from './sessions-store.ts'
 import { ApprovalPanel, QuestionsPanel, type ApprovalDecision } from './tui/panels.ts'
@@ -223,6 +224,7 @@ const BUILTIN_COMMANDS: readonly PaletteCommand[] = [
   { name: 'fork', args: '', description: 'Copy this session into a resumable twin' },
   { name: 'tree', args: '', description: 'Show this session’s family tree of forks' },
   { name: 'jobs', args: '[kill <id>]', description: 'Background jobs: what is running and what finished' },
+  { name: 'mcp', args: '', description: 'MCP servers whose tools are mounted here' },
   { name: 'fleet', args: '', description: 'Sessions across every device (ctrl+f)' },
   { name: 'peer', args: '[add|rm <host>]', description: 'Devices the fleet overview reads' },
   { name: 'about', args: '', description: 'Show version and connection information' },
@@ -2914,6 +2916,10 @@ class TuiApp {
         this.showJobs(rawInput)
         return
 
+      case 'mcp':
+        this.showMcp()
+        return
+
       case 'interrupt': {
         // Two ways to stop a reply. `esc` is a bid for silence: the queue
         // freezes until the user sends again. `/interrupt` is a redirection:
@@ -3303,6 +3309,26 @@ class TuiApp {
     const hit = this.storedHits[Number.parseInt(item.id, 10)]
     if (hit === undefined) return
     await this.openSession(hit.sessionId, hit.project)
+  }
+
+  /**
+   * `/mcp` — which MCP servers' tools this profile actually mounted.
+   *
+   * The MCP client is composition-level, so the view is honest: it reports the
+   * tools whose names carry a bridge prefix and tells the user where servers
+   * are declared, rather than pretending to add or remove them at runtime.
+   */
+  private showMcp(): void {
+    let names: string[] = []
+    const tools = this.ctx.get('tools') as { list?: () => { name?: unknown }[] } | undefined
+    try {
+      names = (tools?.list?.() ?? [])
+        .map((tool) => String(tool.name ?? ''))
+        .filter((name) => name !== '')
+    } catch {
+      names = []
+    }
+    this.showOverlay(renderMcp(groupMcpTools(names), names.length), 'esc to close')
   }
 
   /**

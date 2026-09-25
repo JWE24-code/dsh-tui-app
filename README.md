@@ -428,6 +428,15 @@ The choice is saved with the rest of the durable state and applied before the
 first frame, so it survives a restart. Switching repaints the whole screen at
 once, since a palette change moves the color of nearly every cell.
 
+## MCP servers
+
+`/mcp` shows which MCP servers' tools are mounted here, grouped by server, by
+reading the tool registry for bridge-prefixed names (`mcp__server__tool`,
+`server/tool`). Servers are declared by composition, not at runtime, so the
+pane says where to add one instead of pretending to manage them live — and it
+recognizes MCP patterns narrowly enough that a path like `src/tui/state.ts` is
+never mistaken for a server.
+
 ## Extending the terminal
 
 The app provides `ctx.tuiHost`, a service other plugins extend it with:
