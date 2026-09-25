@@ -227,9 +227,9 @@ try {
 // Peers are remembered so the overview works without repeating --peer on every
 // launch, which is the whole reason they became editable in the pane.
 {
-  const encoded = JSON.stringify({ ...state({ peers: ['oma1', 'joeri@box'] }), version: VERSION })
+  const encoded = JSON.stringify({ ...state({ peers: ['host1', 'user@host2'] }), version: VERSION })
   const back = decodeState(encoded)
-  check('peers round-trip', back.peers.join(',') === 'oma1,joeri@box')
+  check('peers round-trip', back.peers.join(',') === 'host1,user@host2')
 
   check('a file with no peers decodes to none', decodeState(
     JSON.stringify({ ...state(), version: VERSION }),

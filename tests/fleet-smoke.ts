@@ -426,9 +426,9 @@ check(
 
 // The host reaches an ssh command line, so the validator is a gate, not a
 // tidy-up: anything the shell would read as more than one word is refused.
-check('a plain hostname is usable', isValidPeer('oma1'))
+check('a plain hostname is usable', isValidPeer('host1'))
 check('a dotted name is usable', isValidPeer('box.home.arpa'))
-check('user@host is usable', isValidPeer('joeri@192.168.22.28'))
+check('user@host is usable', isValidPeer('user@192.0.2.28'))
 check('an ssh alias with a dash is usable', isValidPeer('build-box'))
 check('empty is refused', !isValidPeer(''))
 check('whitespace only is refused', !isValidPeer('   '))
