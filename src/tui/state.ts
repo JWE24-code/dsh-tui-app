@@ -105,6 +105,7 @@ export type PickerKind =
   | 'open'
   | 'delete'
   | 'rewind'
+  | 'stored'
   | 'none'
 
 /** One row in the picker. */

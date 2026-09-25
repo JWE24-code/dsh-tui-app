@@ -136,6 +136,8 @@ export interface Snapshot {
    * Optional so every existing snapshot builder renders exactly as before.
    */
   selectedTurn?: number
+  /** One line a plugin contributed, drawn above the composer. */
+  pluginLine?: string
 }
 
 /** What push-to-talk is doing, for the footer indicator. */
@@ -149,6 +151,8 @@ export interface Layout {
   inputRows: number
   /** Rows the `@` file-completion popup shows, excluding its border. */
   atRows: number
+  /** One row when a plugin contributed a status line. */
+  pluginRows: number
   /** Rows the background-agent strip occupies, including any border. */
   backgroundRows: number
   /** Rows the session tab bar occupies (0 or 1). */
@@ -205,6 +209,9 @@ export function layout(snapshot: Snapshot): Layout {
   // The tab bar earns its row only once there is more than one session.
   let sessionRows = snapshot.sessions.length > 1 ? 1 : 0
 
+  // A plugin's status line is one row, surrendered first when space is short.
+  let pluginRows = snapshot.pluginLine !== undefined && snapshot.pluginLine.trim() !== '' ? 1 : 0
+
   // The background strip is one line when collapsed, or a bordered list.
   let backgroundRows = 0
   if (snapshot.background.length > 0) {
@@ -224,6 +231,7 @@ export function layout(snapshot: Snapshot): Layout {
     (showGap ? GAP_ROWS : 0) +
     paletteHeight +
     atHeight +
+    pluginRows +
     backgroundRows +
     inputRows +
     FOOTER_ROWS
@@ -234,6 +242,7 @@ export function layout(snapshot: Snapshot): Layout {
   // then the separator, and only a window too small for even that loses the
   // strip entirely. The transcript outranks all of them — a frame showing a
   // four-row agent panel and no conversation would be the wrong trade.
+  if (spare() < MIN_VIEWPORT_ROWS && pluginRows > 0) pluginRows = 0
   if (spare() < MIN_VIEWPORT_ROWS && backgroundRows > 1) backgroundRows = 1
   if (spare() < MIN_VIEWPORT_ROWS && showHeader) showHeader = false
   if (spare() < MIN_VIEWPORT_ROWS && showGap) showGap = false
@@ -246,6 +255,7 @@ export function layout(snapshot: Snapshot): Layout {
     viewportRows,
     paletteRows,
     atRows,
+    pluginRows,
     inputRows,
     backgroundRows,
     sessionRows,
@@ -998,6 +1008,10 @@ export function render(snapshot: Snapshot): {
   rows.push(...palette)
 
   rows.push(...atPane(snapshot, geometry))
+
+  if (geometry.pluginRows > 0 && snapshot.pluginLine !== undefined) {
+    rows.push(muted(truncate(snapshot.pluginLine, width)))
+  }
 
   const composer = composerPane(snapshot, geometry)
   const composerTop = rows.length

@@ -62,8 +62,11 @@ import {
   type AtMatch,
 } from './tui/atfile.ts'
 import { FileIndex } from './file-index.ts'
+import { TuiHost } from './tui-host.ts'
 import { forkCut, lineage, projectUserTurns, rewindTarget } from './rewind.ts'
 import { renderJobs, type JobLike } from './tui/jobs.ts'
+import { searchSessions, type SessionHit } from './cross-find.ts'
+import { sessionsRoot } from './sessions-store.ts'
 import { ApprovalPanel, QuestionsPanel, type ApprovalDecision } from './tui/panels.ts'
 import { UserQuestionError } from '@deepseek-ai/dsh-user-questions'
 import type { AskUserQuestionAnswer, AskUserQuestionRequest } from '@deepseek-ai/dsh-user-questions'
@@ -200,7 +203,11 @@ const BUILTIN_COMMANDS: readonly PaletteCommand[] = [
   { name: 'thinking', args: '', description: "Toggle display of the reasoner's chain-of-thought" },
   { name: 'tools', args: '', description: 'List the tools this agent can call' },
   { name: 'export', args: '[file]', description: 'Write this transcript to a markdown file' },
-  { name: 'find', args: '<text>', description: 'Search the transcript; n and N jump between matches' },
+  {
+    name: 'find',
+    args: '<text> | --sessions <text>',
+    description: 'Search this transcript, or every stored session, for text',
+  },
   { name: 'unqueue', args: '', description: 'Discard prompts queued while a reply was streaming' },
   {
     name: 'interrupt',
@@ -378,6 +385,10 @@ class TuiApp {
   private panel: ApprovalPanel | QuestionsPanel | undefined
   private readonly pendingApprovals: PendingApproval[] = []
   private readonly pendingQuestions: PendingQuestion[] = []
+  /** The extension seam other plugins register shortcuts and a status line into. */
+  private readonly tuiHost: TuiHost
+  /** Hits from the last `/find --sessions`, indexed by picker row. */
+  private storedHits: SessionHit[] = []
   /** Workspace file listing for `@` completion, rebuilt lazily. */
   private fileIndex: FileIndex | undefined
   /** The token esc dismissed, so typing more reopens the menu but esc stays. */
@@ -457,6 +468,7 @@ class TuiApp {
     this.config = config
     this.exit = exit
     this.showThinking = config.thinking === true
+    this.tuiHost = new TuiHost(ctx)
     this.presence = new PresencePublisher(localDshHome())
     this.screen = new Screen({
       onKey: (key) => {
@@ -1210,6 +1222,7 @@ class TuiApp {
       fleet: this.fleet,
       panel: this.panel?.view(),
       selectedTurn: this.selectedTurn,
+      pluginLine: this.tuiHost.statusLine(),
       voice: this.voicePhase,
     }
   }
@@ -1737,6 +1750,7 @@ class TuiApp {
         else if (kind === 'plugins') this.togglePlugin(item.id)
         else if (kind === 'delete') this.confirmDelete(item.id, item.title)
         else if (kind === 'rewind') void this.performRewind(Number.parseInt(item.id, 10))
+        else if (kind === 'stored') void this.openStoredHit(item)
         else void this.openSession(item.id, item.title)
         break
       }
@@ -2034,6 +2048,8 @@ class TuiApp {
           this.selectSession(Number.parseInt(jump[1] ?? '1', 10) - 1)
           break
         }
+        // A plugin may own this key; if it does, the key is never text.
+        if (key.text !== '' && this.tuiHost.dispatch(key.name)) break
         if (key.text === '') break
         // With a search active and nothing typed, `n`/`N` walk the matches —
         // the same letter a pager uses — instead of inserting into the buffer.
@@ -2860,9 +2876,15 @@ class TuiApp {
         this.paint()
         return
 
-      case 'find':
+      case 'find': {
+        const words = rawInput.trim().split(/\s+/).filter((word) => word !== '')
+        if (words[0] === '--sessions' || words[0] === '-s') {
+          this.searchStoredSessions(words.slice(1).join(' '))
+          return
+        }
         this.startSearch(rawInput)
         return
+      }
 
       case 'unqueue': {
         const count = this.tab.queued.length
@@ -3235,6 +3257,52 @@ class TuiApp {
       ].join('\n'),
       'esc to close',
     )
+  }
+
+  /**
+   * `/find --sessions <text>` — search every stored session on this machine.
+   *
+   * The store is read-only here: hits are shown in a picker and opening one
+   * resumes that session, so a search can never disturb a log another process
+   * is still appending to.
+   */
+  private searchStoredSessions(query: string): void {
+    if (query.trim() === '') {
+      this.setStatus('usage: /find --sessions <text>', true)
+      this.paint()
+      return
+    }
+    this.setStatus('searching stored sessions…')
+    this.paint()
+    const result = searchSessions(sessionsRoot(), query)
+    if (result.hits.length === 0) {
+      const note =
+        result.skippedCompressed > 0
+          ? ` (${String(result.skippedCompressed)} compressed logs need a newer Node)`
+          : ''
+      this.setStatus(`no stored session mentions that${note}`, true)
+      this.paint()
+      return
+    }
+    this.storedHits = result.hits
+    this.picker.show(
+      'stored',
+      `Stored sessions: ${String(result.hits.length)} hits in ${String(result.scanned)} logs`,
+      result.hits.map((hit, index) => ({
+        id: String(index),
+        title: hit.line,
+        subtitle: `${hit.role === 'user' ? 'you' : 'model'} · ${hit.project} · ${hit.sessionId.slice(-8)}`,
+      })),
+    )
+    this.setStatus('enter opens that session · esc cancels')
+    this.paint()
+  }
+
+  /** Resume the session a stored-search hit came from. */
+  private async openStoredHit(item: PickerItem): Promise<void> {
+    const hit = this.storedHits[Number.parseInt(item.id, 10)]
+    if (hit === undefined) return
+    await this.openSession(hit.sessionId, hit.project)
   }
 
   /**

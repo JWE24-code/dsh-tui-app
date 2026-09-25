@@ -428,6 +428,29 @@ The choice is saved with the rest of the durable state and applied before the
 first frame, so it survives a restart. Switching repaints the whole screen at
 once, since a palette change moves the color of nearly every cell.
 
+## Extending the terminal
+
+The app provides `ctx.tuiHost`, a service other plugins extend it with:
+
+```ts
+const dispose = ctx.tuiHost.registerShortcut({
+  combo: 'ctrl+shift+g', label: 'git status', handler: () => { /* … */ },
+})
+ctx.tuiHost.setStatusLine('2 agents spinning')
+```
+
+A shortcut must carry `ctrl` or `alt`; a combination the app already uses is
+refused rather than ordered, so a plugin can never swallow the quit
+confirmation or a scroll key. `registerShortcut` and `setStatusLine` both
+return disposers, and the status line is one row — replaced, not stacked, last
+registration wins — that the layout surrenders first when the window is short.
+
+Searching across sessions is built in: `/find --sessions <text>` reads the
+stored session logs (plain or zstd) under `$DSH_HOME/sessions`, shows every
+matching line with its project and speaker, and opens the session on `enter`.
+The store is read-only here; a compressed log on a Node too old to decode it is
+reported as skipped, never as a wrong answer.
+
 ## Rate, cache, and background jobs
 
 The footer carries what the provider reports: prompt and completion tokens, the
@@ -532,7 +555,10 @@ src/
 ```
 
 `src/tui/` imports nothing from the Harness and nothing from npm, which is why
-it can be tested without a profile.
+it can be tested without a profile. `src/tui-host.ts` is the one module that
+does import Cordis, because it *is* the seam (exported as
+`@jwe24-code/dsh-tui-app/tui-host`); its shortcut registry and status line are
+plain classes the service delegates to, so both are tested without a context.
 
 ## Tests
 

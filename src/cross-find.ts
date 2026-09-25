@@ -1,0 +1,194 @@
+/**
+ * Cross-session search: `/find --sessions`.
+ *
+ * Stored sessions live under `$DSH_HOME/sessions/<projectKey>/<sessionId>/` as
+ * either a plain `.jsonl` log or a zstd-compressed one. This module walks them,
+ * reads whichever form it finds, and returns the matching lines with enough
+ * context to recognize the conversation — no index, no cache, and nothing
+ * written, so it can never corrupt a log another process is appending to.
+ *
+ * The zstd decoder is feature-detected: on a Node without it, compressed logs
+ * are skipped and reported as such rather than silently ignored.
+ * @module
+ */
+
+import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { join } from 'node:path'
+import { zstdDecompressSync } from 'node:zlib'
+
+/** One matching line in one stored session. */
+export interface SessionHit {
+  sessionId: string
+  /** The project directory key, for orientation. */
+  project: string
+  /** The matched line, trimmed and truncated for a picker row. */
+  line: string
+  /** Whether the line came from the human or the model, when determinable. */
+  role?: 'user' | 'assistant'
+  /** Absolute path of the log the match came from. */
+  path: string
+}
+
+/** Limits that keep a search from walking an unbounded store. */
+export interface SearchLimits {
+  /** Sessions scanned, newest-first by directory mtime. */
+  maxSessions: number
+  /** Hits returned overall. */
+  maxHits: number
+  /** Bytes of an uncompressed log read per session. */
+  maxBytes: number
+}
+
+export const DEFAULT_LIMITS: SearchLimits = {
+  maxSessions: 400,
+  maxHits: 80,
+  maxBytes: 4_000_000,
+}
+
+/** Whether this build of Node can decompress a zstd log. */
+export function zstdAvailable(): boolean {
+  return typeof zstdDecompressSync === 'function'
+}
+
+/** Extract printable message text from one JSONL record, or `''`. */
+function textOfRecord(raw: string): { text: string; role?: 'user' | 'assistant' } {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return { text: '' }
+  }
+  const record = parsed as { type?: unknown; data?: { message?: { content?: unknown } } }
+  const type = String(record.type ?? '')
+  const role = type === 'user/message' ? 'user' : type === 'assistant/message' ? 'assistant' : undefined
+  if (role === undefined) return { text: '' }
+  const blocks = record.data?.message?.content
+  if (!Array.isArray(blocks)) return { text: '' }
+  const text = blocks
+    .filter((block): block is { type: string; text: string } => {
+      const candidate = block as { type?: unknown; text?: unknown }
+      return candidate.type === 'text' && typeof candidate.text === 'string'
+    })
+    .map((block) => block.text)
+    .join(' ')
+  return { text, ...(role === undefined ? {} : { role }) }
+}
+
+/** Read one log file, decompressing when it is zstd, bounded by `maxBytes`. */
+function readLog(path: string, maxBytes: number): string | undefined {
+  try {
+    const raw = readFileSync(path)
+    if (path.endsWith('.zstd')) {
+      if (!zstdAvailable()) return undefined
+      // A compressed frame cannot be decoded from a prefix, so the whole file
+      // is decoded — but a log beyond the byte ceiling is skipped rather than
+      // held in memory twice.
+      if (raw.byteLength > maxBytes) return undefined
+      try {
+        return zstdDecompressSync(raw).toString('utf8')
+      } catch {
+        return undefined
+      }
+    }
+    const slice = raw.byteLength > maxBytes ? raw.subarray(0, maxBytes) : raw
+    return slice.toString('utf8')
+  } catch {
+    return undefined
+  }
+}
+
+/** Session directories under the store root, most recently modified first. */
+function sessionDirs(root: string): { project: string; dir: string; id: string; mtime: number }[] {
+  const found: { project: string; dir: string; id: string; mtime: number }[] = []
+  let projects: string[]
+  try {
+    projects = readdirSync(root)
+  } catch {
+    return found
+  }
+  for (const project of projects) {
+    const projectDir = join(root, project)
+    let entries: string[]
+    try {
+      entries = readdirSync(projectDir)
+    } catch {
+      continue
+    }
+    for (const id of entries) {
+      if (!id.startsWith('session-')) continue
+      const dir = join(projectDir, id)
+      try {
+        if (!statSync(dir).isDirectory()) continue
+        found.push({ project, dir, id, mtime: statSync(dir).mtimeMs })
+      } catch {
+        continue
+      }
+    }
+  }
+  found.sort((a, b) => b.mtime - a.mtime)
+  return found
+}
+
+/** The log file inside a session directory, whichever format it is. */
+function logFile(dir: string): string | undefined {
+  let entries: string[]
+  try {
+    entries = readdirSync(dir)
+  } catch {
+    return undefined
+  }
+  const zstd = entries.find((name) => name.endsWith('.jsonl.zstd'))
+  if (zstd !== undefined) return join(dir, zstd)
+  const plain = entries.find((name) => name.endsWith('.jsonl'))
+  return plain === undefined ? undefined : join(dir, plain)
+}
+
+/**
+ * Search every stored session for a case-insensitive substring.
+ *
+ * @returns matching lines in session order (newest session first), capped by
+ *   the limits. Skipped compressed logs on a Node without zstd mean fewer
+ *   results, never wrong ones.
+ */
+export function searchSessions(
+  root: string,
+  query: string,
+  limits: SearchLimits = DEFAULT_LIMITS,
+): { hits: SessionHit[]; scanned: number; skippedCompressed: number } {
+  const needle = query.trim().toLowerCase()
+  if (needle === '') return { hits: [], scanned: 0, skippedCompressed: 0 }
+  const hits: SessionHit[] = []
+  let scanned = 0
+  let skippedCompressed = 0
+  for (const candidate of sessionDirs(root)) {
+    if (scanned >= limits.maxSessions || hits.length >= limits.maxHits) break
+    const path = logFile(candidate.dir)
+    if (path === undefined) continue
+    if (path.endsWith('.zstd') && !zstdAvailable()) {
+      skippedCompressed += 1
+      continue
+    }
+    const body = readLog(path, limits.maxBytes)
+    if (body === undefined) continue
+    scanned += 1
+    for (const raw of body.split('\n')) {
+      if (hits.length >= limits.maxHits) break
+      if (!raw.includes('"')) continue
+      const { text, role } = textOfRecord(raw)
+      if (text === '') continue
+      const context = text.replace(/\s+/g, ' ').trim()
+      const index = context.toLowerCase().indexOf(needle)
+      if (index === -1) continue
+      const at = Math.max(index - 30, 0)
+      const snippet = context.slice(at, at + 140)
+      hits.push({
+        sessionId: candidate.id,
+        project: candidate.project.replace(/^--|--$/g, ''),
+        line: at > 0 ? `…${snippet}` : snippet,
+        ...(role === undefined ? {} : { role }),
+        path,
+      })
+    }
+  }
+  return { hits, scanned, skippedCompressed }
+}
