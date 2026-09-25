@@ -29,6 +29,7 @@
         contextLimit: !!js ctx.tuiStartup.contextLimit
         mouse: !!js ctx.tuiStartup.mouse
         bell: !!js ctx.tuiStartup.bell
+        peers: !!js ctx.tuiStartup.peers
 
 # The terminal owns the screen; a hot reload repainting underneath it would
 # corrupt the alternate buffer.
