@@ -53,6 +53,14 @@ dsh-tui-app
 `dsh plugin --profile tui add @jwe24-code/dsh-tui-app` works too. `/update`
 inside the app checks npm and upgrades the global install.
 
+The installer also links the installed Harness's own `@deepseek-ai` packages
+into the app. This is not optional bookkeeping: the profile links the app from
+wherever it was installed, so Node resolves the app's imports from the app's
+own directory, where those packages do not otherwise exist — and the app would
+crash on boot with `ERR_MODULE_NOT_FOUND`. Linking the harness's copies (rather
+than installing a second set) also guarantees exactly one `@deepseek-ai/cordis`,
+because two copies would be two different `Service` classes.
+
 From source — clone, build, and link the profile to the checkout:
 
 ```sh
@@ -106,7 +114,7 @@ npm run typecheck
 | `--no-bell` | Stay silent when a session finishes |
 | `--peer <host>` | Device to include in the fleet overview; repeatable |
 | `--no-restore` | Start with one empty session instead of reopening the last ones |
-| `--version` | Print the app version and exit |
+| `--version` | Print the app version — shadowed by the launcher's own `--version`, so use `/about` inside the app |
 
 `DSH_TUI_CONTEXT_LIMIT` sets the same budget; `DSH_TUI_THEME=light\|dark`
 overrides background detection; `NO_COLOR` disables styling.
@@ -671,7 +679,7 @@ regression still would.
     provider parses the real command line.
   - `dsh --profile tui </dev/null` boots the bundle and exits on the non-TTY
     guard.
-- **25 suites, 1410 assertions**, covering rendering (including a pty round
+- **27 suites, 1420 assertions**, covering rendering (including a pty round
   trip through the real screen, decoder, and frame renderer), streaming
   projection, queueing, steering, persistence, session storage, cross-session
   search, the panels, the plugin seam, i18n, the fleet, and the render cache.
@@ -696,6 +704,20 @@ regression still would.
   mounted and where to declare a server — there is no runtime add/remove.
 - **Two release steps remain manual**: publishing to npm (needs the account's
   credentials) and listing on dshfind.
+
+## Release steps
+
+```sh
+npm test              # 26 suites, including the pty round trip
+npm run test:live     # a real model turn through the TUI (needs credentials)
+npm run test:package  # packs, installs into a clean prefix + DSH_HOME, boots
+npm publish           # prepublishOnly re-runs build + typecheck + npm test
+```
+
+`test:package` exists because the suites all run from the source checkout,
+where `link-types` has already made the Harness resolvable — which is exactly
+how a tarball that could not resolve `@deepseek-ai/*` once passed every test
+and still crashed on boot. It now fails the release instead.
 
 ## License
 

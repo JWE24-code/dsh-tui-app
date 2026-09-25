@@ -15,6 +15,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { homedir } from 'node:os'
+import { findDshRoot, linkHarnessPackages } from './harness-root.mjs'
 
 const profileName = process.argv[2] ?? 'tui'
 if (profileName === '' || profileName.includes('/') || profileName.includes('\\')) {
@@ -96,6 +97,27 @@ try {
   console.error(`install-profile: ${manager} install failed: ${error.message}`)
   console.error(`install-profile: run it yourself in ${profileDir}`)
   process.exit(1)
+}
+
+// The profile links this package from wherever it lives, so Node resolves its
+// `@deepseek-ai/*` imports from the package's own directory — where, on a
+// clean machine, those packages do not exist. Linking the harness's own copies
+// in is what makes a freshly installed app boot at all; it is idempotent, and
+// it deliberately keeps the harness's copies rather than installing a second
+// `@deepseek-ai/cordis`, which would be a different Service class.
+const dshRoot = findDshRoot()
+if (dshRoot === undefined) {
+  console.warn('install-profile: no `dsh` installation found to link harness packages from.')
+  console.warn('install-profile: install @deepseek-ai/dsh, or set DSH_INSTALL_ROOT to its package directory.')
+} else {
+  const { linked, failed } = linkHarnessPackages(repoRoot, dshRoot)
+  if (linked.length > 0) {
+    console.log(`install-profile: linked ${String(linked.length)} harness packages into the app`)
+  }
+  if (failed.length > 0) {
+    console.warn(`install-profile: could not link ${failed.join(', ')} — the app may fail to boot`)
+    console.warn(`install-profile: re-run with permission to write ${repoRoot}/node_modules`)
+  }
 }
 
 console.log(`install-profile: done — run it with:  dsh --profile ${profileName}`)

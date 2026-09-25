@@ -4,3 +4,6 @@ lib
 
 # Claude Code worktrees and local session state live inside the repo.
 .claude
+
+# Packed artifacts from npm pack / the package check.
+*.tgz
