@@ -3,7 +3,7 @@
  * and plan review. All pure state — the Cordis wiring lives in the app layer.
  */
 import assert from 'node:assert/strict'
-import { ApprovalPanel, QuestionsPanel, type QuestionSpec } from '../src/tui/panels.ts'
+import { ApprovalPanel, QuestionsPanel, interpretApproval, type QuestionSpec } from '../src/tui/panels.ts'
 import { render } from '../src/tui/view.ts'
 import { Composer, Palette, Picker } from '../src/tui/state.ts'
 import { displayWidth } from '../src/tui/text.ts'
@@ -30,6 +30,21 @@ check('the reason is carried into the detail', approvalView.detail.includes('wri
 check('the command is shown', approvalView.detail.includes('rm -rf build'))
 check('exactly two rows', approvalView.rows.length === 2)
 check('the first row is highlighted', approvalView.rows[0]?.selected === true)
+
+// ------------------------------------------------- spoken approval answers
+
+check('a plain yes allows', interpretApproval('yes') === 'allowed-once')
+check('allow allows', interpretApproval('allow') === 'allowed-once')
+check('approve in a sentence allows', interpretApproval('go ahead and approve it') === 'allowed-once')
+check('a plain no denies', interpretApproval('no') === 'rejected')
+check('deny denies', interpretApproval('deny that') === 'rejected')
+check('punctuation does not matter', interpretApproval('Allow, please!') === 'allowed-once')
+check('an ambiguous sentence never grants', interpretApproval('hmm not sure what that does') === undefined)
+check('an empty take decides nothing', interpretApproval('') === undefined)
+check('a denial wins over an allow', interpretApproval("no, don't allow it") === 'rejected')
+check('chinese yes allows', interpretApproval('允许') === 'allowed-once')
+check('chinese no denies', interpretApproval('拒绝') === 'rejected')
+check('unrelated speech decides nothing', interpretApproval('what time is it') === undefined)
 
 // ------------------------------------------------------- questions: single
 

@@ -522,6 +522,13 @@ and `esc` steps back a question before it cancels the set (`ASK_CANCELLED`).
 Typing on an option row answers with that option plus your text, the way a
 form does.
 
+**Answering by voice.** With push-to-talk configured, `ctrl+v` while an
+approval panel is open records a take and reads it: an unambiguous "allow" or
+"deny" (or 允许 / 拒绝) decides the request, while anything ambiguous leaves the
+panel waiting — the microphone can never grant a tool call on a misheard
+sentence, and a denial wins when both words appear. The same precedence applies
+to `esc`: it cancels a live recording before it denies anything.
+
 **Plan review.** `exit_plan_mode` renders the plan as markdown with its own
 Approve / Keep-planning options. Approving never carries feedback — the
 protocol reads feedback as "keep planning" — so typing while feedback is not a

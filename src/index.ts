@@ -69,7 +69,12 @@ import { groupMcpTools, renderMcp } from './tui/mcp.ts'
 import { LANGS, currentLanguage, isLang, setLanguage, type Lang } from './tui/i18n.ts'
 import { decodeLogBytes, parseLogMessages, searchSessions, type SessionHit } from './cross-find.ts'
 import { encodeSegment, projectKey, sessionsRoot } from './sessions-store.ts'
-import { ApprovalPanel, QuestionsPanel, type ApprovalDecision } from './tui/panels.ts'
+import {
+  ApprovalPanel,
+  QuestionsPanel,
+  interpretApproval,
+  type ApprovalDecision,
+} from './tui/panels.ts'
 import { UserQuestionError } from '@deepseek-ai/dsh-user-questions'
 import type { AskUserQuestionAnswer, AskUserQuestionRequest } from '@deepseek-ai/dsh-user-questions'
 import type {} from '@deepseek-ai/dsh-user-approval'
@@ -689,8 +694,23 @@ class TuiApp {
   private handlePanelKey(key: Key): void {
     const panel = this.panel
     if (panel === undefined) return
+    // The microphone outranks the panel: a live take is the most modal state
+    // the app has, so esc cancels it rather than deciding the request.
+    if (this.voicePhase !== undefined) {
+      if (key.name === 'esc') {
+        this.cancelVoice()
+        return
+      }
+      if (key.name === 'ctrl+v') {
+        this.toggleVoice()
+        return
+      }
+    }
     if (panel instanceof ApprovalPanel) {
       switch (key.name) {
+        case 'ctrl+v':
+          if (this.voicePhase === undefined) this.toggleVoice()
+          return
         case 'up':
         case 'ctrl+p':
           panel.move(-1)
@@ -1371,6 +1391,18 @@ class TuiApp {
       const text = await transcribe(setup, recording.wavPath)
       // The take may have been abandoned while whisper was still thinking.
       if (this.voicePhase !== 'transcribing') return
+      // A take spoken at an approval panel answers it instead of typing: the
+      // whole point of the panel is that the keyboard is captured, so the
+      // dictation would otherwise land somewhere nobody can act on.
+      if (this.panel instanceof ApprovalPanel) {
+        const decision = interpretApproval(text)
+        if (decision === undefined) {
+          this.setStatus('say "allow" or "deny" to answer the request')
+        } else {
+          this.settleApproval(this.panel, decision)
+        }
+        return
+      }
       const insertion = insertionFor(this.composer.value(), this.composer.position(), text)
       if (insertion === '') {
         this.setStatus('heard nothing')

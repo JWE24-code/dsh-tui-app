@@ -38,6 +38,28 @@ export interface PanelView {
   inputFocused?: boolean
 }
 
+/**
+ * Read a spoken (transcribed) answer as an approval decision.
+ *
+ * Deliberately narrow: a misheard sentence must never grant a tool call, so
+ * only unambiguous words decide and anything else returns `undefined`, leaving
+ * the panel waiting. Both shipped interface languages are accepted.
+ */
+export function interpretApproval(text: string): ApprovalDecision | undefined {
+  const words = text
+    .toLowerCase()
+    .replace(/[.,!?;:，。！？；：]/g, ' ')
+    .split(/\s+/)
+    .filter((word) => word !== '')
+  const yes = new Set(['allow', 'allowed', 'yes', 'yeah', 'ok', 'okay', 'approve', 'approved', 'go', 'run', '允许', '同意', '可以', '好的', '好', '是', '行'])
+  const no = new Set(['deny', 'denied', 'no', 'nope', 'reject', 'rejected', 'stop', 'cancel', '拒绝', '不行', '不要', '不', '取消', '否'])
+  // A denial wins when both appear ("no, don't allow it"): the safe reading of
+  // an ambiguous sentence is the one that does not run a tool.
+  if (words.some((word) => no.has(word))) return 'rejected'
+  if (words.some((word) => yes.has(word))) return 'allowed-once'
+  return undefined
+}
+
 /** What the user decided about one approval request. */
 export type ApprovalDecision = 'allowed-once' | 'rejected'
 
