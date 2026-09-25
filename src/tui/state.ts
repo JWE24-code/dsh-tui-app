@@ -40,6 +40,17 @@ export interface ToolActivity {
 }
 
 /**
+ * Whether a turn's queued prompts should send once it settles.
+ *
+ * A clean finish always drains the queue. An interrupt is the user asking for
+ * silence — so it freezes the queue — *unless* the interrupt was asked for as
+ * a redirection (`/interrupt`): stop this answer, then run what was queued.
+ */
+export function queueShouldDrain(options: { interrupted: boolean; drainRequested: boolean }): boolean {
+  return !options.interrupted || options.drainRequested
+}
+
+/**
  * What a session is doing, for the tab bar.
  *
  * `ready` is the state worth interrupting someone for: the turn finished and

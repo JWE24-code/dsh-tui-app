@@ -132,7 +132,8 @@ the streaming block, with the footer counting them (`2 queued — sends when
 the reply finishes`). The moment a turn finishes without an interrupt, the
 next queued prompt sends itself, in order, into the same session — even if
 you have switched tabs in between. Interrupting with `esc` keeps the queue;
-it flushes the next time a turn completes cleanly, or `/unqueue` discards it.
+it flushes the next time a turn completes cleanly, `/interrupt` stops the reply and
+flushes it now, or `/unqueue` discards it.
 
 ## Tool calls and scrolling
 
@@ -356,7 +357,7 @@ alongside the app's own:
 | Command | Owner |
 |---|---|
 | `/compact`, and any other plugin command | `ctx.commands` (the Harness registry) |
-| `/new`, `/sessions`, `/close`, `/resume`, `/delete`, `/rename`, `/model`, `/theme`, `/thinking`, `/tools`, `/export`, `/find`, `/unqueue`, `/copy`, `/about`, `/help`, `/exit` (`/quit`) | this app |
+| `/new`, `/sessions`, `/close`, `/resume`, `/delete`, `/rename`, `/model`, `/theme`, `/thinking`, `/tools`, `/export`, `/find`, `/unqueue`, `/interrupt`, `/copy`, `/about`, `/help`, `/exit` (`/quit`) | this app |
 
 Unknown commands are dispatched to `ctx.commands.execute()` and only reported
 as unknown if the registry also rejects them.

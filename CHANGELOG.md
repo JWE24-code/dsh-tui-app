@@ -7,6 +7,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Interrupt as redirection** — `/interrupt` stops the streaming reply and
+  pushes the queued prompts into the loop, where `esc` keeps its old meaning
+  of silence (the queue freezes until sent again). The status line after a
+  plain interrupt now names both exits, and the queue's drain decision is a
+  tested pure function.
 - **Tool calls that say what they do** — an expanded tool call shows its
   arguments as one readable line (the command for `bash`, the path for edits,
   the query for searches, the first argument otherwise), and the line appears

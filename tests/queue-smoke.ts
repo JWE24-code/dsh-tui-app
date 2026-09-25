@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict'
 
-import { Composer, Palette, Picker } from '../src/tui/state.ts'
+import { Composer, Palette, Picker, queueShouldDrain } from '../src/tui/state.ts'
 import { render } from '../src/tui/view.ts'
 import { stripAnsi } from '../src/tui/text.ts'
 
@@ -85,3 +85,12 @@ check('wrapped queued lines stay inside the frame', wrapped.every((line) => line
 
 // eslint-disable-next-line no-console
 console.log(`ok - ${String(checks)} checks passed`)
+
+// ---------------------------------------------- when the queue may drain
+
+check('a clean finish drains the queue', queueShouldDrain({ interrupted: false, drainRequested: false }))
+check('an interrupt freezes the queue', !queueShouldDrain({ interrupted: true, drainRequested: false }))
+check('/interrupt drains despite the interrupt', queueShouldDrain({ interrupted: true, drainRequested: true }))
+check('a redirection flag is harmless on a clean finish', queueShouldDrain({ interrupted: false, drainRequested: true }))
+
+console.log(`ok - ${checks} queue checks passed`)

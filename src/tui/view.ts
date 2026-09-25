@@ -913,7 +913,7 @@ export const HELP_TEXT = [
   '- `↑` / `↓` on the first / last row — recall earlier prompts',
   '- `/` — command palette · `tab` accept · `esc` dismiss',
   '- `esc` — clear a search, else interrupt a reply while it is streaming',
-  '- `enter` while streaming queues the prompt · `/unqueue` discards it',
+  '- `enter` while streaming queues · `/unqueue` discards · `/interrupt` runs them',
   '- `ctrl+n` — new session · `ctrl+r` — resume · `ctrl+t` — toggle thinking',
   '- `pgup` / `pgdn` — page · `ctrl+u` / `ctrl+d` — half page',
   '- `shift+↑` / `shift+↓` — one line · `ctrl+g` — back to newest',

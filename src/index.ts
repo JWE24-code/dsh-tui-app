@@ -39,6 +39,7 @@ import {
   Palette,
   Picker,
   ownerOfDelegated,
+  queueShouldDrain,
   type Message,
   type PaletteCommand,
   type BackgroundAgent,
@@ -181,6 +182,11 @@ const BUILTIN_COMMANDS: readonly PaletteCommand[] = [
   { name: 'export', args: '[file]', description: 'Write this transcript to a markdown file' },
   { name: 'find', args: '<text>', description: 'Search the transcript; n and N jump between matches' },
   { name: 'unqueue', args: '', description: 'Discard prompts queued while a reply was streaming' },
+  {
+    name: 'interrupt',
+    args: '',
+    description: 'Stop the streaming reply and run the queued prompts now',
+  },
   { name: 'copy', args: '', description: 'Copy the last reply to the system clipboard' },
   { name: 'fleet', args: '', description: 'Sessions across every device (ctrl+f)' },
   { name: 'about', args: '', description: 'Show version and connection information' },
@@ -216,6 +222,11 @@ interface SessionTab {
    * turn finishes without an interrupt, then send themselves in order.
    */
   queued: string[]
+  /**
+   * `/interrupt` was asked for on this turn: stop the reply in flight, then
+   * hand control to the queue instead of freezing it like a plain `esc`.
+   */
+  drainQueue: boolean
   /** `ready` means a turn finished and you have not looked since. */
   status: SessionStatus
   /**
@@ -261,6 +272,7 @@ function newTab(id: string): SessionTab {
     haveUsage: false,
     scrollBack: 0,
     queued: [],
+    drainQueue: false,
     status: 'idle',
     logSyncedSeq: 0,
     selection: { current: undefined, assembled: undefined },
@@ -1842,6 +1854,7 @@ class TuiApp {
 
     tab.streaming = true
     tab.streamStartedAt = Date.now()
+    tab.drainQueue = false
     tab.streamingText = ''
     tab.streamingReasoning = ''
     tab.streamingTools = []
@@ -1898,11 +1911,17 @@ class TuiApp {
       this.setSessionStatus(tab, 'ready')
       void this.flush(tab)
       // An interrupted turn must not launch the next prompt unbidden: the
-      // user asked for silence, so the queue waits for a clean finish. The
-      // follow-up is fire-and-forget like every other send call site —
-      // awaiting it here would stack one frame per queued prompt.
-      const interrupted = abort.signal.aborted
-      if (!interrupted && tab.queued.length > 0) {
+      // user asked for silence, so the queue waits for a clean finish —
+      // unless the interrupt was the redirection kind (`/interrupt`), which
+      // stops this answer precisely so the queue can carry on. The follow-up
+      // is fire-and-forget like every other send call site — awaiting it here
+      // would stack one frame per queued prompt.
+      const drain = queueShouldDrain({
+        interrupted: abort.signal.aborted,
+        drainRequested: tab.drainQueue,
+      })
+      tab.drainQueue = false
+      if (drain && tab.queued.length > 0) {
         const next = tab.queued.shift()
         if (next !== undefined) {
           void this.sendTo(tab, next, true)
@@ -1910,9 +1929,9 @@ class TuiApp {
           return
         }
       }
-      if (tab.queued.length > 0 && this.tabs[this.active] === tab) {
+      if (!drain && tab.queued.length > 0 && this.tabs[this.active] === tab) {
         this.setStatus(
-          `${String(tab.queued.length)} queued — kept after the interrupt · /unqueue clears`,
+          `${String(tab.queued.length)} queued — kept after the interrupt · /interrupt runs them`,
         )
       }
       this.paint()
@@ -2057,6 +2076,25 @@ class TuiApp {
             : `cleared ${String(count)} queued message${count === 1 ? '' : 's'}`,
         )
         this.paint()
+        return
+      }
+
+      case 'interrupt': {
+        // Two ways to stop a reply. `esc` is a bid for silence: the queue
+        // freezes until the user sends again. `/interrupt` is a redirection:
+        // stop this answer, then push the queued prompts into the loop.
+        if (!this.tab.streaming) {
+          this.setStatus('nothing is streaming')
+          this.paint()
+          return
+        }
+        this.tab.drainQueue = true
+        this.setStatus(
+          this.tab.queued.length > 0
+            ? `interrupting — ${String(this.tab.queued.length)} queued will run`
+            : 'interrupting…',
+        )
+        this.interrupt()
         return
       }
 
