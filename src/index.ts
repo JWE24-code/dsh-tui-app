@@ -63,6 +63,7 @@ import {
 } from './tui/atfile.ts'
 import { FileIndex } from './file-index.ts'
 import { TuiHost } from './tui-host.ts'
+import { Vim } from './tui/vim.ts'
 import { forkCut, lineage, projectUserTurns, rewindTarget } from './rewind.ts'
 import { renderJobs, type JobLike } from './tui/jobs.ts'
 import { groupMcpTools, renderMcp } from './tui/mcp.ts'
@@ -238,6 +239,7 @@ const BUILTIN_COMMANDS: readonly PaletteCommand[] = [
   { name: 'jobs', args: '[kill <id>]', description: 'Background jobs: what is running and what finished' },
   { name: 'mcp', args: '', description: 'MCP servers whose tools are mounted here' },
   { name: 'lang', args: '[en|zh-CN]', description: 'Interface language' },
+  { name: 'vim', args: '', description: 'Toggle vim modal editing in the composer' },
   {
     name: 'dispatch',
     args: '<device> <task>',
@@ -405,6 +407,8 @@ class TuiApp {
   private panel: ApprovalPanel | QuestionsPanel | undefined
   private readonly pendingApprovals: PendingApproval[] = []
   private readonly pendingQuestions: PendingQuestion[] = []
+  /** Modal vim editing for the composer, off until `/vim` asks for it. */
+  private readonly vim = new Vim()
   /** The extension seam other plugins register shortcuts and a status line into. */
   private readonly tuiHost: TuiHost
   /** Hits from the last `/find --sessions`, indexed by picker row. */
@@ -1261,6 +1265,7 @@ class TuiApp {
       panel: this.panel?.view(),
       selectedTurn: this.selectedTurn,
       pluginLine: this.tuiHost.statusLine(),
+      vimMode: this.vim.enabled ? this.vim.mode : undefined,
       voice: this.voicePhase,
     }
   }
@@ -1969,6 +1974,18 @@ class TuiApp {
   }
 
   private handleChatKey(key: Key): void {
+    // Vim mode owns the composer while it is on. A panel, picker, or fleet
+    // screen never reaches here, so modal editing can never eat their keys.
+    if (this.vim.enabled) {
+      const outcome = this.vim.handle(key.name, key.text, this.composer)
+      if (outcome === 'mode' || outcome === 'handled') {
+        this.history.reset()
+        if (outcome === 'handled' || this.vim.normal) this.setStatus('')
+        this.updateAtMenu()
+        this.paint()
+        return
+      }
+    }
     switch (key.name) {
       case 'ctrl+c':
         this.requestQuit()
@@ -3134,6 +3151,17 @@ class TuiApp {
           return
         }
         void this.dispatchTo(device, task)
+        return
+      }
+
+      case 'vim': {
+        this.vim.setEnabled(!this.vim.enabled)
+        this.setStatus(
+          this.vim.enabled
+            ? 'vim keys on — esc leaves insert, ctrl+c still interrupts'
+            : 'vim keys off',
+        )
+        this.paint()
         return
       }
 

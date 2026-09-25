@@ -139,6 +139,8 @@ export interface Snapshot {
   selectedTurn?: number
   /** One line a plugin contributed, drawn above the composer. */
   pluginLine?: string
+  /** The composer's vim mode, when modal editing is on. */
+  vimMode?: 'insert' | 'normal'
 }
 
 /** What push-to-talk is doing, for the footer indicator. */
@@ -940,7 +942,13 @@ function footer(snapshot: Snapshot, width: number): string {
     const clipped = truncate(snapshot.status, Math.max(Math.floor(width / 2), 10))
     right = snapshot.statusIsError ? warn(clipped) : ok(clipped)
   } else if (snapshot.picker.kind === 'none' && !snapshot.palette.open) {
-    right = muted(t('footer.hint'))
+    right = snapshot.vimMode === undefined
+      ? muted(t('footer.hint'))
+      : style(snapshot.vimMode === 'normal' ? ' NORMAL ' : ' INSERT ', {
+          fg: colText,
+          bg: snapshot.vimMode === 'normal' ? colAccent : colBorder,
+          bold: true,
+        })
   }
 
   const gap = width - displayWidth(left) - displayWidth(right)

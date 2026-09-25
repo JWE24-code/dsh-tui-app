@@ -440,6 +440,25 @@ The choice is saved with the rest of the durable state and applied before the
 first frame, so it survives a restart. Switching repaints the whole screen at
 once, since a palette change moves the color of nearly every cell.
 
+## Vim mode
+
+`/vim` turns the composer modal. It starts in INSERT — enabling vim never
+changes what typing does — and `esc` switches to NORMAL, where the footer shows
+the mode and bare keys follow vim:
+
+| NORMAL key | |
+|---|---|
+| `h` / `l` / `0` / `^` / `$` / `w` / `b` | motion, with vim's word-start `w` rather than readline's end-of-word |
+| `i` / `I` / `a` / `A` / `o` / `O` | enter INSERT at, before, after, or on a new line |
+| `x` / `X` / `dd` / `d$` / `d0` / `dw` | delete a character, a line, to the end, to the start, a word |
+| `u` | undo the last vim edit (100 deep) |
+| anything unbound | swallowed, so a stray `j` cannot type |
+
+While vim mode is on, `esc` belongs to the editor: `ctrl+c` is the interrupt,
+which is also what the footer's mode badge is there to remind you of. The mode
+is session-scoped and not persisted, and the vim layer only ever touches the
+composer — a panel, picker, or fleet screen owns the keyboard when it is open.
+
 ## Interface language
 
 `/lang` switches the interface between English and Simplified Chinese and
@@ -652,7 +671,7 @@ regression still would.
     provider parses the real command line.
   - `dsh --profile tui </dev/null` boots the bundle and exits on the non-TTY
     guard.
-- **25 suites, 1371 assertions**, covering rendering (including a pty round
+- **25 suites, 1410 assertions**, covering rendering (including a pty round
   trip through the real screen, decoder, and frame renderer), streaming
   projection, queueing, steering, persistence, session storage, cross-session
   search, the panels, the plugin seam, i18n, the fleet, and the render cache.

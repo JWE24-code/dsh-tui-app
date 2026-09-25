@@ -228,6 +228,31 @@ export class Composer {
     this.cursor = this.text.length
   }
 
+  /** Offset of the first character of the cursor's logical line. */
+  lineStartIndex(): number {
+    const at = this.text.lastIndexOf('\n', Math.max(this.cursor - 1, 0))
+    return at === -1 ? 0 : at + 1
+  }
+
+  /** Offset of the newline (or end of buffer) that closes the cursor's line. */
+  lineEndIndex(): number {
+    const at = this.text.indexOf('\n', this.cursor)
+    return at === -1 ? this.text.length : at
+  }
+
+  /**
+   * Delete a half-open range and park the cursor at its start.
+   *
+   * The bounds are clamped, so a motion that ran off either end of the buffer
+   * deletes what it actually covered rather than throwing.
+   */
+  deleteRange(start: number, end: number): void {
+    const from = Math.min(Math.max(start, 0), this.text.length)
+    const to = Math.min(Math.max(end, from), this.text.length)
+    this.text = this.text.slice(0, from) + this.text.slice(to)
+    this.cursor = Math.min(from, this.text.length)
+  }
+
   /** Move the cursor one visual row up or down within the wrapped composer. */
   moveRow(delta: number, width: number): void {
     const rows = this.layout(width)
