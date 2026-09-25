@@ -28,16 +28,20 @@ jobs:
 
   # Compile the Harness-typed files (src/index.ts, src/startup.ts) against the
   # real @deepseek-ai packages, which `npm test` never touches because src/tui/
-  # is dependency-free. This is the only gate that catches upstream API drift.
+  # is dependency-free. This is the only gate that catches upstream API drift,
+  # so it runs against both supported dsh lines: `latest` and `next`.
   typecheck:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        dsh: [latest, next]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - run: npm install -g @deepseek-ai/dsh
+      - run: npm install -g @deepseek-ai/dsh@${{ matrix.dsh }}
       - run: npm ci
       - run: npm run link-types
       - run: npm run typecheck

@@ -39,11 +39,25 @@ terminal is the only surface.
 ## Install
 
 Requires a working `dsh` on `PATH` (`npm install -g @deepseek-ai/dsh`) and
-Node 22+. `pnpm` is optional — npm is enough.
+Node 22+.
+
+From npm — one command, then the launcher installs the profile and hands the
+terminal to dsh:
 
 ```sh
-git clone <this repo> ~/Projects/dsh-tui
-cd ~/Projects/dsh-tui
+npm install -g @jwe24-code/dsh-tui-app
+dsh-tui-app
+```
+
+`dsh-tui-app install` only refreshes the profile, and
+`dsh plugin --profile tui add @jwe24-code/dsh-tui-app` works too. `/update`
+inside the app checks npm and upgrades the global install.
+
+From source — clone, build, and link the profile to the checkout:
+
+```sh
+git clone https://github.com/JWE24-code/dsh-tui-app ~/Projects/dsh-tui-app
+cd ~/Projects/dsh-tui-app
 npm install
 npm run build              # emits lib/
 npm run install-profile    # creates $DSH_HOME/profiles/tui and links this checkout
@@ -496,7 +510,7 @@ packages.
 
 ## Status and caveats
 
-- **Verified against a real `dsh` install** (0.1.5-rc.3):
+- **Verified against real `dsh` installs** (0.1.5-rc.3 and 0.1.7-rc.2; CI typechecks both `latest` and `next`):
   - `npm run link-types && npm run typecheck` passes clean against the
     `@deepseek-ai` packages inside the installed runtime.
   - `dsh --profile tui --dump-config` composes the tree, showing `dsh-base`

@@ -204,6 +204,7 @@ const BUILTIN_COMMANDS: readonly PaletteCommand[] = [
   { name: 'fleet', args: '', description: 'Sessions across every device (ctrl+f)' },
   { name: 'peer', args: '[add|rm <host>]', description: 'Devices the fleet overview reads' },
   { name: 'about', args: '', description: 'Show version and connection information' },
+  { name: 'update', args: '', description: 'Update this package from npm, if a newer one exists' },
   { name: 'help', args: '', description: 'Show keys and commands' },
   { name: 'exit', args: '', description: 'Quit dsh' },
 ]
@@ -720,11 +721,13 @@ class TuiApp {
     this.disposers.push(
       this.ctx.on('agent/created', (payload) => {
         note(payload.agent, 'idle')
+        return undefined
       }),
     )
     this.disposers.push(
       this.ctx.on('agent/status', (payload) => {
         note(payload.agent, payload.status)
+        return undefined
       }),
     )
     this.disposers.push(
@@ -2110,6 +2113,54 @@ class TuiApp {
     this.paint()
   }
 
+  /**
+   * `/update`: check npm for a newer release and install it globally.
+   *
+   * The check follows the configured registry (`NPM_CONFIG_REGISTRY`), so
+   * mirror users see the versions their package manager actually installs.
+   * Restarting is left to the user — sessions reopen on launch — because a
+   * live self-restart would abandon the terminal the app is drawing in.
+   */
+  private async selfUpdate(): Promise<void> {
+    const packageName = '@jwe24-code/dsh-tui-app'
+    const registry = process.env['NPM_CONFIG_REGISTRY'] ?? 'https://registry.npmjs.org'
+    this.setStatus('checking npm for a newer version…')
+    this.paint()
+    let latest: string
+    try {
+      const response = await fetch(`${registry.replace(/\/+$/, '')}/${packageName}`)
+      if (!response.ok) throw new Error(`registry answered ${String(response.status)}`)
+      const body = (await response.json()) as { 'dist-tags'?: { latest?: unknown } }
+      if (typeof body['dist-tags']?.latest !== 'string') throw new Error('no latest tag')
+      latest = body['dist-tags'].latest
+    } catch (error) {
+      this.setStatus(`update check failed: ${describeError(error)}`, true)
+      this.paint()
+      return
+    }
+    if (latest === VERSION) {
+      this.setStatus(`already the latest version (${VERSION})`)
+      this.paint()
+      return
+    }
+    this.setStatus(`updating to ${latest}…`)
+    this.paint()
+    const code = await new Promise<number>((resolve) => {
+      const child = spawn('npm', ['install', '-g', `${packageName}@${latest}`], {
+        stdio: 'ignore',
+      })
+      child.on('error', () => resolve(1))
+      child.on('exit', (exitCode) => resolve(exitCode ?? 1))
+    })
+    this.setStatus(
+      code === 0
+        ? `updated to ${latest} — restart dsh; your sessions reopen`
+        : 'update failed — installed from a checkout? git pull and rebuild instead',
+      code !== 0,
+    )
+    this.paint()
+  }
+
   /** Show version and connection details in the transcript pane. */
   private showAbout(): void {
     this.showOverlay(
@@ -2563,6 +2614,10 @@ class TuiApp {
 
       case 'about':
         this.showAbout()
+        return
+
+      case 'update':
+        void this.selfUpdate()
         return
 
       case 'tools': {
