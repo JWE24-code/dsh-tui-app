@@ -1,5 +1,5 @@
 /** Preview a tool-heavy turn — the case that motivated collapsing. */
-import { Composer, Palette, Picker } from '../src/tui/state.ts'
+import { Composer, Palette, Picker, textMessage } from '../src/tui/state.ts'
 import { render, type Snapshot } from '../src/tui/view.ts'
 
 const expand = process.argv[2] === 'expand'
@@ -14,16 +14,20 @@ const snapshot: Snapshot = {
   host: 'local harness',
   modelName: 'glm-5.3',
   messages: [
-    { role: 'user', content: 'can i add skills' },
+    textMessage('user', 'can i add skills'),
     {
       role: 'assistant',
-      content: "I'll look at how this harness discovers skills so I can tell you where to add them.",
-      tools,
+      segments: [
+        {
+          kind: 'text',
+          text: "I'll look at how this harness discovers skills so I can tell you where to add them.",
+        },
+        ...tools.map((tool) => ({ kind: 'tool' as const, tool })),
+      ],
     },
   ],
-  streamingText: '',
+  streamingSegments: [],
   streamingReasoning: '',
-  streamingTools: [],
   streaming: false,
   spinner: '⠋',
   status: '',

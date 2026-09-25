@@ -11,7 +11,8 @@
  * @module dsh-tui-app/tui/stream
  */
 
-import type { ToolActivity } from './state.ts'
+import type { Segment, ToolActivity } from './state.ts'
+import { appendText, findTool } from './state.ts'
 import { describeToolCall } from './tooldetail.ts'
 
 /**
@@ -27,9 +28,9 @@ const argumentBuffers = new WeakMap<ToolActivity, string>()
  * with no Harness types in sight.
  */
 export interface StreamingSurface {
-  streamingText: string
+  /** The turn so far, prose and calls in the order they arrived. */
+  streamingSegments: Segment[]
   streamingReasoning: string
-  streamingTools: ToolActivity[]
   promptTokens: number
   completionTokens: number
   totalTokens: number
@@ -72,16 +73,20 @@ export interface StreamChunkLike {
 /**
  * Apply one stream chunk to a streaming surface, mutating it in place.
  *
- * Mirrors `onFrame` exactly: `text-delta` and `reasoning-delta` append, a
- * `tool-call-delta` adds or names a running tool row keyed by call id,
- * `usage` lands the token counters, and `block-end` settles the matching row
- * to `ok`. Unknown chunk kinds are ignored on purpose — the chunk union is
- * merge-extensible and a plugin may emit one this app has never heard of.
+ * `text-delta` continues the turn's trailing run of prose, a `tool-call-delta`
+ * adds or names a running tool row keyed by call id, `usage` lands the token
+ * counters, and `block-end` settles the matching row to `ok`. Unknown chunk
+ * kinds are ignored on purpose — the chunk union is merge-extensible and a
+ * plugin may emit one this app has never heard of.
+ *
+ * Order is the point: text after a call opens a new segment rather than
+ * extending the text before it, so "checking…", the call, and "found it" stay
+ * three things in sequence instead of one paragraph and a detached list.
  */
 export function projectStreamChunk(surface: StreamingSurface, chunk: StreamChunkLike): void {
   switch (chunk.type) {
     case 'text-delta':
-      surface.streamingText += chunk.text ?? ''
+      appendText(surface.streamingSegments, chunk.text ?? '')
       break
     case 'reasoning-delta':
       surface.streamingReasoning += chunk.text ?? ''
@@ -92,10 +97,10 @@ export function projectStreamChunk(surface: StreamingSurface, chunk: StreamChunk
       // The argument deltas accumulate into the row's detail as they arrive —
       // partial JSON still reads as the command typing itself out.
       const id = String(chunk.id)
-      let row = surface.streamingTools.find((tool) => tool.id === id)
+      let row = findTool(surface.streamingSegments, (tool) => tool.id === id)
       if (row === undefined) {
         row = { id, name: chunk.name ?? 'tool', status: 'running' }
-        surface.streamingTools.push(row)
+        surface.streamingSegments.push({ kind: 'tool', tool: row })
       }
       if (chunk.name !== undefined && row.name === 'tool') row.name = chunk.name
       if (chunk.argumentsDelta !== undefined && chunk.argumentsDelta !== '') {
@@ -124,14 +129,17 @@ export function projectStreamChunk(surface: StreamingSurface, chunk: StreamChunk
       const block = chunk.block
       if (block === undefined || block.type !== 'tool-call') break
       const row =
-        surface.streamingTools.find((tool) => tool.id === String(block.id)) ??
-        surface.streamingTools.find((tool) => tool.name === block.name)
+        findTool(surface.streamingSegments, (tool) => tool.id === String(block.id)) ??
+        findTool(surface.streamingSegments, (tool) => tool.name === block.name)
       if (row === undefined) {
-        surface.streamingTools.push({
-          id: String(block.id),
-          name: block.name ?? 'tool',
-          status: 'ok',
-          detail: describeToolCall(block.name ?? 'tool', block.arguments),
+        surface.streamingSegments.push({
+          kind: 'tool',
+          tool: {
+            id: String(block.id),
+            name: block.name ?? 'tool',
+            status: 'ok',
+            detail: describeToolCall(block.name ?? 'tool', block.arguments),
+          },
         })
       } else {
         row.name = block.name ?? row.name

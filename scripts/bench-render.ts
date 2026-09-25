@@ -7,7 +7,7 @@
  * It prints numbers rather than asserting them: a benchmark that fails CI on a
  * noisy machine teaches nobody anything.
  */
-import { Composer, Palette, Picker, type Message } from '../src/tui/state.ts'
+import { Composer, Palette, Picker, textMessage, type Message } from '../src/tui/state.ts'
 import { render, type Snapshot } from '../src/tui/view.ts'
 
 const messages = Number.parseInt(process.argv[2] ?? '400', 10)
@@ -19,23 +19,30 @@ function transcript(count: number): Message[] {
   const out: Message[] = []
   for (let index = 0; index < count; index += 1) {
     if (index % 2 === 0) {
-      out.push({ role: 'user', content: `prompt ${String(index)}: tail the container log and show errors` })
+      out.push(textMessage('user', `prompt ${String(index)}: tail the container log and show errors`))
     } else {
+      // A realistic turn: narrate, call, narrate, call, answer — which is the
+      // shape the renderer now walks rather than one blob plus a list.
       out.push({
         role: 'assistant',
-        content: [
-          `Answer ${String(index)}.`,
-          '',
-          '```sh',
-          'docker logs --tail 50 -f webui',
-          '```',
-          '',
-          `- option one for turn ${String(index)}`,
-          `- option two with a longer explanation that has to wrap across the line`,
-        ].join('\n'),
-        tools: [
-          { id: `t${String(index)}a`, name: 'bash', status: 'ok', detail: 'docker ps' },
-          { id: `t${String(index)}b`, name: 'grep', status: 'ok', detail: 'webui' },
+        segments: [
+          { kind: 'text', text: `Looking into turn ${String(index)}.` },
+          { kind: 'tool', tool: { id: `t${String(index)}a`, name: 'bash', status: 'ok', detail: 'docker ps' } },
+          { kind: 'text', text: 'The container is up, so the log is worth reading.' },
+          { kind: 'tool', tool: { id: `t${String(index)}b`, name: 'grep', status: 'ok', detail: 'webui' } },
+          {
+            kind: 'text',
+            text: [
+              `Answer ${String(index)}.`,
+              '',
+              '```sh',
+              'docker logs --tail 50 -f webui',
+              '```',
+              '',
+              `- option one for turn ${String(index)}`,
+              `- option two with a longer explanation that has to wrap across the line`,
+            ].join('\n'),
+          },
         ],
       })
     }
@@ -51,9 +58,8 @@ function snapshot(history: Message[]): Snapshot {
     host: 'local harness',
     modelName: 'deepseek-chat',
     messages: history,
-    streamingText: '',
+    streamingSegments: [],
     streamingReasoning: '',
-    streamingTools: [],
     streaming: false,
     spinner: '⠋',
     status: '',

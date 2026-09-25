@@ -21,7 +21,7 @@
  */
 
 import { Screen } from '../src/tui/screen.ts'
-import { Composer, Palette, Picker, type Message } from '../src/tui/state.ts'
+import { Composer, Palette, Picker, textMessage, type Message } from '../src/tui/state.ts'
 import { render, type Snapshot } from '../src/tui/view.ts'
 import { AtMenu, activeAtToken, acceptToken, filterFiles } from '../src/tui/atfile.ts'
 import { ApprovalPanel, QuestionsPanel } from '../src/tui/panels.ts'
@@ -64,9 +64,8 @@ function snapshot(): Snapshot {
     host: 'local harness',
     modelName: 'deepseek-chat',
     messages,
-    streamingText: '',
+    streamingSegments: [],
     streamingReasoning: '',
-    streamingTools: [],
     streaming: false,
     spinner: '⠋',
     status: notices.length === 0 ? '' : (notices[notices.length - 1] ?? ''),
@@ -209,7 +208,7 @@ const screen = new Screen({
         return
       }
       if (text !== '') {
-        messages.push({ role: 'user', content: text })
+        messages.push(textMessage('user', text))
         composer.reset()
         repaint()
       }

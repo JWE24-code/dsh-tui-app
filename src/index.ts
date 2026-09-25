@@ -40,13 +40,19 @@ import {
   InputHistory,
   Palette,
   Picker,
+  findTool,
+  messageText,
+  messageTools,
   moveSelection,
   ownerOfDelegated,
   queueShouldDrain,
+  segmentTools,
+  textMessage,
   type Message,
   type PaletteCommand,
   type BackgroundAgent,
   type PickerItem,
+  type Segment,
   type SessionStatus,
   type SessionSummary,
   type ToolActivity,
@@ -291,9 +297,9 @@ interface SessionTab {
   title: string
   messages: Message[]
   streaming: boolean
-  streamingText: string
+  /** The turn streaming in, prose and calls in the order they arrived. */
+  streamingSegments: Segment[]
   streamingReasoning: string
-  streamingTools: ToolActivity[]
   streamStartedAt: number
   promptTokens: number
   completionTokens: number
@@ -353,9 +359,8 @@ function newTab(id: string): SessionTab {
     title: '',
     messages: [],
     streaming: false,
-    streamingText: '',
+    streamingSegments: [],
     streamingReasoning: '',
-    streamingTools: [],
     streamStartedAt: 0,
     promptTokens: 0,
     completionTokens: 0,
@@ -660,14 +665,15 @@ class TuiApp {
   private commandForCall(callId: string | undefined): string | undefined {
     if (callId === undefined) return undefined
     for (const message of this.tab.messages) {
-      for (const tool of message.tools ?? []) {
+      for (const tool of messageTools(message)) {
         if (tool.id === callId && tool.detail !== undefined) return tool.detail
       }
     }
-    for (const tool of this.tab.streamingTools) {
-      if (tool.id === callId && tool.detail !== undefined) return tool.detail
-    }
-    return undefined
+    const streaming = findTool(
+      this.tab.streamingSegments,
+      (tool) => tool.id === callId && tool.detail !== undefined,
+    )
+    return streaming?.detail
   }
 
   private dropApproval(pending: PendingApproval): void {
@@ -1078,7 +1084,7 @@ class TuiApp {
       const event = session.eventAt(SessionSeq(tab.logSyncedSeq)) as
         | { type?: string; data?: Record<string, unknown> }
         | undefined
-      if (event !== undefined) applyToolEvent(tab.streamingTools, event)
+      if (event !== undefined) applyToolEvent(segmentTools(tab.streamingSegments), event)
       tab.logSyncedSeq += 1
     }
   }
@@ -1230,9 +1236,8 @@ class TuiApp {
       host: hostLabel(process.env['DSH_HOST'] ?? 'local harness'),
       modelName: this.tab.modelName,
       messages: this.tab.messages,
-      streamingText: this.tab.streamingText,
+      streamingSegments: this.tab.streamingSegments,
       streamingReasoning: this.tab.streamingReasoning,
-      streamingTools: this.tab.streamingTools as never,
       streaming: this.tab.streaming,
       spinner: SPINNER[this.spinnerIndex % SPINNER.length] ?? '',
       status: this.status,
@@ -2552,7 +2557,7 @@ class TuiApp {
   private lastReply(): Message | undefined {
     for (let index = this.tab.messages.length - 1; index >= 0; index -= 1) {
       const message = this.tab.messages[index]
-      if (message !== undefined && message.role === 'assistant' && message.content.trim() !== '') {
+      if (message !== undefined && message.role === 'assistant' && messageText(message).trim() !== '') {
         return message
       }
     }
@@ -2587,7 +2592,7 @@ class TuiApp {
       this.paint()
       return
     }
-    const result = this.writeClipboard(message.content)
+    const result = this.writeClipboard(messageText(message))
     if (result.ok) {
       this.setStatus(`copied the selected turn${result.truncated ? ' (truncated)' : ''}`)
     } else {
@@ -2609,7 +2614,7 @@ class TuiApp {
       this.paint()
       return
     }
-    const result = this.writeClipboard(message.content)
+    const result = this.writeClipboard(messageText(message))
     if (result.ok) {
       this.setStatus(`copied the last reply to the clipboard${result.truncated ? ' (truncated)' : ''}`)
     } else {
@@ -2766,16 +2771,16 @@ class TuiApp {
   private async steer(prompt: PromptDraft): Promise<void> {
     const agent = this.tab.agent
     if (agent === undefined) return
-    this.tab.messages.push({
-      role: 'user',
-      content: prompt.text,
-      steering: true,
-      attachments: prompt.images.map((ref) => ({
-        name: ref.name ?? 'image',
-        width: ref.width,
-        height: ref.height,
-      })),
-    })
+    this.tab.messages.push(
+      textMessage('user', prompt.text, {
+        steering: true,
+        attachments: prompt.images.map((ref) => ({
+          name: ref.name ?? 'image',
+          width: ref.width,
+          height: ref.height,
+        })),
+      }),
+    )
     this.scrollToBottom()
     this.setStatus('steered into the running turn')
     this.paint()
@@ -2865,18 +2870,18 @@ class TuiApp {
       this.history.add(text)
       this.persistSoon()
     }
-    tab.messages.push({
-      role: 'user',
-      content: text,
-      attachments:
-        prompt.images.length === 0
-          ? undefined
-          : prompt.images.map((ref) => ({
-              name: ref.name ?? 'image',
-              width: ref.width,
-              height: ref.height,
-            })),
-    })
+    tab.messages.push(
+      textMessage('user', text, {
+        attachments:
+          prompt.images.length === 0
+            ? undefined
+            : prompt.images.map((ref) => ({
+                name: ref.name ?? 'image',
+                width: ref.width,
+                height: ref.height,
+              })),
+      }),
+    )
     if (tab.title === '') {
       tab.title = text.slice(0, 60)
       // A tab restored with no title reads as "new session" in the bar, which
@@ -2888,9 +2893,8 @@ class TuiApp {
     tab.streamStartedAt = Date.now()
     tab.turnStartTokens = tab.completionTokens
     tab.drainQueue = false
-    tab.streamingText = ''
+    tab.streamingSegments = []
     tab.streamingReasoning = ''
-    tab.streamingTools = []
     // Tool results land in the session log between model streams, where no
     // frame fires; the sync reads them from here on. Events before this point
     // belong to earlier turns and must not color this one's rows.
@@ -2930,19 +2934,22 @@ class TuiApp {
       // the last frame, and the committed rows are what /export and a restart
       // will show.
       this.syncToolLog(tab)
-      const content = tab.streamingText.trim()
       const reasoning = tab.streamingReasoning.trim()
-      if (content !== '' || reasoning !== '' || tab.streamingTools.length > 0) {
+      // The turn commits with its order intact — the same segments that were
+      // on screen while it streamed, so nothing rearranges itself once it
+      // settles.
+      const segments = tab.streamingSegments.filter(
+        (segment) => segment.kind === 'tool' || segment.text.trim() !== '',
+      )
+      if (segments.length > 0 || reasoning !== '') {
         tab.messages.push({
           role: 'assistant',
-          content,
+          segments,
           reasoning: reasoning === '' ? undefined : reasoning,
-          tools: tab.streamingTools.length === 0 ? undefined : [...tab.streamingTools],
         })
       }
-      tab.streamingText = ''
+      tab.streamingSegments = []
       tab.streamingReasoning = ''
-      tab.streamingTools = []
       // The answer is in: ring unless it is already on screen.
       this.setSessionStatus(tab, 'ready')
       void this.flush(tab)
@@ -3308,11 +3315,11 @@ class TuiApp {
       const result = execution.result ?? execution
       const okResult = String(result.kind ?? 'success') === 'success'
       const text = String(result.text ?? '')
-      this.tab.messages.push({
-        role: 'assistant',
-        content: text === '' ? (okResult ? 'done' : 'failed') : text,
-        command: { name, ok: okResult },
-      })
+      this.tab.messages.push(
+        textMessage('assistant', text === '' ? (okResult ? 'done' : 'failed') : text, {
+          command: { name, ok: okResult },
+        }),
+      )
       this.setStatus(okResult ? '' : `/${name} failed`, !okResult)
       // A command can rewrite history (compaction does), so re-read it.
       if (this.tab.agent !== undefined) this.refreshFromSession()
@@ -4231,8 +4238,8 @@ function readHistory(session: Session): Message[] {
       .map((block) => block.text)
       .join('')
     if (text === '') continue
-    if (event.type === 'assistant/message') out.push({ role: 'assistant', content: text })
-    else if (event.type === 'user/message') out.push({ role: 'user', content: text })
+    if (event.type === 'assistant/message') out.push(textMessage('assistant', text))
+    else if (event.type === 'user/message') out.push(textMessage('user', text))
   }
   return out
 }

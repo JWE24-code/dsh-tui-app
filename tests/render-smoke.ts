@@ -22,6 +22,8 @@ import {
   estimateTokens,
   fuzzyMatch,
   ownerOfDelegated,
+  textMessage,
+  type Message,
 } from '../src/tui/state.ts'
 import { displayWidth, truncate, wrap, stripAnsi, padEnd } from '../src/tui/text.ts'
 import { renderMarkdown } from '../src/tui/markdown.ts'
@@ -157,16 +159,20 @@ function snapshot(overrides: Partial<Snapshot> = {}): Snapshot {
     host: 'local harness',
     modelName: 'deepseek-chat',
     messages: [
-      { role: 'user', content: 'how do i tail docker logs?' },
+      textMessage('user', 'how do i tail docker logs?'),
       {
         role: 'assistant',
-        content: 'Use `docker logs`:\n\n```sh\ndocker logs --tail 50 -f web\n```\n\n- `-t` adds timestamps',
-        tools: [{ name: 'read_file', status: 'ok' }],
+        segments: [
+          { kind: 'tool', tool: { name: 'read_file', status: 'ok' } },
+          {
+            kind: 'text',
+            text: 'Use `docker logs`:\n\n```sh\ndocker logs --tail 50 -f web\n```\n\n- `-t` adds timestamps',
+          },
+        ],
       },
     ],
-    streamingText: '',
+    streamingSegments: [],
     streamingReasoning: '',
-    streamingTools: [],
     streaming: false,
     spinner: '⠋',
     status: '',
@@ -245,7 +251,11 @@ check('welcome estimates context', stripAnsi(welcome[welcome.length - 1] ?? '').
 // Streaming: spinner on the left, partial text in the transcript.
 const streaming = assertFrame(
   'streaming',
-  snapshot({ streaming: true, streamingText: 'partial answer', messages: [] }),
+  snapshot({
+    streaming: true,
+    streamingSegments: [{ kind: 'text', text: 'partial answer' }],
+    messages: [],
+  }),
 )
 check('streaming shows the spinner', stripAnsi(streaming[streaming.length - 1] ?? '').includes('⠋'))
 check('streaming shows partial text', streaming.some((line) => stripAnsi(line).includes('partial answer')))
@@ -355,7 +365,7 @@ const thinking = assertFrame(
   'thinking',
   snapshot({
     showThinking: true,
-    messages: [{ role: 'assistant', content: 'answer', reasoning: 'let me think' }],
+    messages: [textMessage('assistant', 'answer', { reasoning: 'let me think' })],
   }),
 )
 check('thinking is shown when toggled', thinking.some((line) => stripAnsi(line).includes('let me think')))
@@ -364,7 +374,7 @@ const hidden = assertFrame(
   'thinking hidden',
   snapshot({
     showThinking: false,
-    messages: [{ role: 'assistant', content: 'answer', reasoning: 'let me think' }],
+    messages: [textMessage('assistant', 'answer', { reasoning: 'let me think' })],
   }),
 )
 check('thinking is hidden by default', !hidden.some((line) => stripAnsi(line).includes('let me think')))
@@ -417,124 +427,141 @@ for (const rows of [8, 12, 24, 40, 60]) {
 
 check('hostLabel strips the scheme', hostLabel('https://example.com/') === 'example.com')
 
-// ------------------------------------------------------- tool collapsing
+// ------------------------------------------------ tool calls, where they happened
 
-const busy = Array.from({ length: 9 }, (_, index) => ({
-  name: ['bash', 'bash', 'bash', 'bash', 'bash', 'grep', 'grep', 'grep', 'read'][index] ?? 'bash',
-  status: 'ok' as const,
-}))
+/** A turn that said something, ran a tool, then said something else. */
+const interleaved: Message = {
+  role: 'assistant',
+  segments: [
+    { kind: 'text', text: 'Let me check the containers.' },
+    { kind: 'tool', tool: { name: 'bash', status: 'ok', detail: 'docker ps', result: 'webui' } },
+    { kind: 'text', text: 'Only **webui** is up.' },
+  ],
+}
 
-const collapsed = assertFrame(
-  'collapsed tools',
-  snapshot({ messages: [{ role: 'assistant', content: 'done', tools: busy }] }),
-).map((line) => stripAnsi(line))
-check('a settled run collapses to one line', collapsed.some((line) => line.includes('9 tools')))
-check('the collapsed line names the busiest tools', collapsed.some((line) => line.includes('bash ×5')))
-check('the collapsed line counts the rest', collapsed.some((line) => line.includes('grep ×3')))
-check('collapsed hides the individual rows', collapsed.filter((line) => line.includes('bash')).length === 1)
-check('collapsed advertises the expansion', collapsed.some((line) => line.includes('ctrl+o')))
+const inOrder = assertFrame('interleaved turn', snapshot({ messages: [interleaved] })).map((line) =>
+  stripAnsi(line),
+)
+const at = (needle: string): number => inOrder.findIndex((line) => line.includes(needle))
+check('the prose before a call renders', at('Let me check the containers.') !== -1)
+check('the call renders', at('bash') !== -1)
+check('the prose after a call renders', at('Only webui is up.') !== -1)
+check(
+  'a turn reads in the order it happened',
+  at('Let me check the containers.') < at('bash') && at('bash') < at('Only webui is up.'),
+)
+check(
+  'the prose either side of a call stays separate',
+  !inOrder.some((line) => line.includes('containers.Only')),
+)
+check('markdown still renders in a segment', inOrder.some((line) => line.includes('webui is up')))
+
+// Collapsed is one line per call — the outcome is what ctrl+o adds.
+check('a collapsed call is one line', inOrder.filter((line) => line.includes('bash')).length === 1)
+check('a collapsed call hides its outcome', !inOrder.some((line) => line.trim() === '↳ webui'))
+check('a hidden outcome advertises the expansion', inOrder.some((line) => line.includes('ctrl+o')))
 
 const expanded = assertFrame(
-  'expanded tools',
-  snapshot({ expandTools: true, messages: [{ role: 'assistant', content: 'done', tools: busy }] }),
+  'expanded call',
+  snapshot({ expandTools: true, messages: [interleaved] }),
 ).map((line) => stripAnsi(line))
-check('expanded lists every call', expanded.filter((line) => line.trim().endsWith('bash')).length === 5)
+check('an expanded call shows its outcome under it', expanded.some((line) => line.trim() === '↳ webui'))
+check('an expanded turn drops the hint', !expanded.some((line) => line.includes('ctrl+o')))
+check(
+  'an expanded outcome stays inside its own turn',
+  expanded.findIndex((line) => line.trim() === '↳ webui') <
+    expanded.findIndex((line) => line.includes('Only webui is up.')),
+)
 
-// A run in flight is a single animated line, not a growing column.
+// Every call in a long run gets its own row, in place.
+const busy: Message = {
+  role: 'assistant',
+  segments: ['bash', 'bash', 'bash', 'grep', 'read'].map((name) => ({
+    kind: 'tool' as const,
+    tool: { name, status: 'ok' as const },
+  })),
+}
+const manyCalls = assertFrame('many calls', snapshot({ messages: [busy] })).map((line) =>
+  stripAnsi(line),
+)
+check('each call gets its own row', manyCalls.filter((line) => line.trim() === '✓ bash').length === 3)
+check('no run is summarised as a count', !manyCalls.some((line) => line.includes('5 tools')))
+
+// The call in flight carries the spinner and its elapsed time, in place.
 const inFlight = assertFrame(
-  'running tools',
+  'running call',
   snapshot({
     messages: [],
     streaming: true,
-    streamingText: '',
     elapsedSeconds: 12,
-    streamingTools: [
-      { name: 'bash', status: 'ok' },
-      { name: 'grep', status: 'running' },
+    streamingSegments: [
+      { kind: 'text', text: 'Looking now.' },
+      { kind: 'tool', tool: { name: 'bash', status: 'ok' } },
+      { kind: 'tool', tool: { name: 'grep', status: 'running', detail: 'pattern: TODO' } },
     ],
   }),
 ).map((line) => stripAnsi(line))
 check('a running turn shows the spinner', inFlight.some((line) => line.includes('⠋')))
-check('a running turn names the tool in flight', inFlight.some((line) => line.includes('grep')))
-check('a running turn counts what is done', inFlight.some((line) => line.includes('1 done')))
-check('a running turn shows elapsed time', inFlight.some((line) => line.includes('12s')))
+check('the spinner sits on the call in flight', inFlight.some((line) => line.includes('⠋') && line.includes('grep')))
+check('a settled call keeps its own mark', inFlight.some((line) => line.trim() === '✓ bash'))
+check('a running call shows what it is doing', inFlight.some((line) => line.includes('pattern: TODO')))
+check('a running call shows elapsed time', inFlight.some((line) => line.includes('12s')))
+check(
+  'elapsed belongs to the running call only',
+  inFlight.filter((line) => line.includes('12s')).length === 1,
+)
 
 const failedRun = assertFrame(
-  'failed tools',
+  'failed call',
   snapshot({
     messages: [
-      { role: 'assistant', content: 'done', tools: [{ name: 'bash', status: 'error' as const }] },
+      {
+        role: 'assistant',
+        segments: [{ kind: 'tool', tool: { name: 'bash', status: 'error' } }],
+      },
     ],
   }),
 ).map((line) => stripAnsi(line))
 check('a failed call is surfaced', failedRun.some((line) => line.includes('✗')))
 
-// One call is named outright rather than counted, with no expansion hint.
-const single = assertFrame(
-  'single tool',
-  snapshot({ messages: [{ role: 'assistant', content: 'done', tools: [{ name: 'bash', status: 'ok' as const }] }] }),
-).map((line) => stripAnsi(line))
-check('a single call is named', single.some((line) => line.trim() === '✓ bash'))
-check('a single call offers no expansion hint', !single.some((line) => line.includes('ctrl+o')))
-
-// A call says what it does, and its outcome sits under it — in flow.
-const narrated = assertFrame(
-  'narrated tools',
+const erroredOutcome = assertFrame(
+  'errored outcome',
   snapshot({
     expandTools: true,
     messages: [
       {
         role: 'assistant',
-        content: 'done',
-        tools: [
-          { name: 'bash', status: 'ok' as const, detail: 'docker ps --format {{.Names}}', result: 'webui postgres' },
-          { name: 'grep', status: 'error' as const, detail: 'pattern: TODO', result: 'no matches' },
+        segments: [
+          {
+            kind: 'tool',
+            tool: { name: 'grep', status: 'error', detail: 'pattern: TODO', result: 'no matches' },
+          },
         ],
       },
     ],
   }),
 ).map((line) => stripAnsi(line))
-check('an expanded call shows what it does', narrated.some((line) => line.includes('docker ps')))
-check(
-  'a result sits under its own call',
-  narrated.some((line) => line.trim() === '↳ webui postgres'),
-)
-check('an errored call shows its outcome', narrated.some((line) => line.includes('no matches')))
+check('an errored call shows its outcome', erroredOutcome.some((line) => line.includes('no matches')))
 
-const singleNarrated = assertFrame(
-  'single narrated tool',
+// A call with nothing to show behind the expansion must not claim otherwise.
+const noOutcome = assertFrame(
+  'call with no outcome',
   snapshot({
     messages: [
       {
         role: 'assistant',
-        content: 'done',
-        tools: [{ name: 'bash', status: 'ok' as const, detail: 'docker ps', result: 'webui' }],
+        segments: [{ kind: 'tool', tool: { name: 'bash', status: 'ok', detail: 'ls' } }],
       },
     ],
   }),
 ).map((line) => stripAnsi(line))
-check('a single collapsed call shows its command', singleNarrated.some((line) => line.includes('docker ps')))
-check('a single collapsed call shows its outcome', singleNarrated.some((line) => line.includes('webui')))
-
-const inFlightNarrated = assertFrame(
-  'running narrated tool',
-  snapshot({
-    messages: [],
-    streaming: true,
-    streamingText: '',
-    streamingTools: [{ name: 'bash', status: 'running' as const, detail: 'docker ps' }],
-  }),
-).map((line) => stripAnsi(line))
-check('a running call shows what it is doing', inFlightNarrated.some((line) => line.includes('docker ps')))
+check('a call with no outcome offers no expansion hint', !noOutcome.some((line) => line.includes('ctrl+o')))
 
 // --------------------------------------------------------------- scrolling
 
 const tall = snapshot({
   rows: 12,
-  messages: Array.from({ length: 30 }, (_, index) => ({
-    role: 'assistant' as const,
-    content: `line ${index}`,
-  })),
+  messages: Array.from({ length: 30 }, (_, index) => textMessage('assistant', `line ${index}`)),
 })
 const limit = maxScrollBack(tall)
 check('a long transcript can scroll', limit > 0)
@@ -673,8 +700,8 @@ check('a cramped window keeps a usable transcript', cramped.viewportRows >= 3)
   const searchable = snapshot({
     rows: 20,
     messages: [
-      { role: 'assistant', content: 'Here is the answer with a **keyword**.' },
-      { role: 'user', content: 'then the keyword again' },
+      textMessage('assistant', 'Here is the answer with a **keyword**.'),
+      textMessage('user', 'then the keyword again'),
     ],
   })
   const hits = findMatches(searchable, 'keyword')
@@ -683,7 +710,7 @@ check('a cramped window keeps a usable transcript', cramped.viewportRows >= 3)
   check('search returns nothing on a miss', findMatches(searchable, 'absent').length === 0)
   check('search ignores a blank query', findMatches(searchable, '   ').length === 0)
   check('search works over streaming text', findMatches(
-    snapshot({ messages: [], streaming: true, streamingText: 'a live needle streams' }),
+    snapshot({ messages: [], streaming: true, streamingSegments: [{ kind: 'text', text: 'a live needle streams' }] }),
     'needle',
   ).length === 1)
 }
@@ -775,9 +802,9 @@ check('a wrapped buffer ends on the last row only', wrappedRow.atLastRow(10) && 
 {
   const searchable = snapshot({
     messages: [
-      { role: 'user', content: 'needle one' },
-      { role: 'assistant', content: 'no match here' },
-      { role: 'user', content: 'needle two' },
+      textMessage('user', 'needle one'),
+      textMessage('assistant', 'no match here'),
+      textMessage('user', 'needle two'),
     ],
   })
   check('an empty query matches nothing', findMatches(searchable, '').length === 0)

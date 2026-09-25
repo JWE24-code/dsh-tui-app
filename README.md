@@ -138,7 +138,7 @@ overrides background detection; `NO_COLOR` disables styling.
 | `ctrl+n` / `ctrl+r` / `ctrl+t` | New session · resume · toggle thinking |
 | `pgup`/`pgdn` | Scroll a page · `ctrl+↑`/`ctrl+↓` half a page |
 | `shift+↑`/`shift+↓` | Scroll one line · `ctrl+g` jumps back to the newest |
-| `ctrl+o` | Expand or collapse the turn's tool calls |
+| `ctrl+o` | Show or hide each tool call's outcome, under the call itself |
 | `ctrl+x` | Compact the session |
 | `ctrl+b` | Expand or collapse the background-agent strip |
 | `ctrl+y` | Copy the last reply to the clipboard |
@@ -188,19 +188,47 @@ the token leaves the text and the image goes along as a content block, with a
 `🖼 name WxH` line in the transcript. Without the attachment service the path
 is inserted as plain text instead.
 
-## Tool calls and scrolling
+## Tool calls, where they happened
 
-A long agent turn is mostly `bash bash grep read`, and a column of those pushes
-the answer off the screen. Tool activity is therefore collapsed by default —
-one animated line while the turn runs, naming the tool in flight and how long
-it has been going, then one line with a count once it settles:
+An agent turn is a sequence: it says something, runs a tool, says something
+about what came back. The transcript is written that way — each call is one line
+in the place it was made, between the prose on either side of it:
 
 ```
- ✓ 9 tools  bash ×5, grep ×3, read
+ Let me check what is running.
+
+ ✓ bash  docker ps
+
+ Only webui is up, so its log is the one to read.
+
+ ⠹ bash  docker logs --tail 50 webui  8s
+```
+
+The call in flight carries the spinner and its own elapsed time; a settled call
+carries `✓`, or `✗` with its error. `ctrl+o` adds each call's outcome
+underneath the call that produced it:
+
+```
+ ✓ bash  docker ps
+   ↳ webui postgres
+```
+
+A turn whose calls returned something to show says so once, at the end, rather
+than advertising an expansion that would reveal nothing:
+
+```
    ctrl+o for detail
 ```
 
-`ctrl+o` expands the full list. A turn with a single call just names it.
+This replaced an earlier design that held a turn's prose as one string and its
+calls as a separate list, then drew all the calls above all the text. That threw
+away the one thing a reader needs — which call the next sentence is about — and
+because the prose fragments were concatenated with nothing between them, two
+paragraphs from either side of a call arrived as one run of text. Order is now
+part of the model (`Segment` in `src/tui/state.ts`), not something the renderer
+tries to reconstruct.
+
+## Scrolling
 
 The app is keyboard-first, so the wheel is **off** by default: terminals
 suppress their own text selection while mouse reporting is on, which is a poor
@@ -664,12 +692,14 @@ packages.
 ## Performance
 
 Rendering is a per-line diff over a zero-dependency renderer, and each settled
-transcript turn's lines are cached by identity and width, so a frame re-renders
-only what changed. Measured with `npm run bench` (Node 26, 200x60 window):
+transcript turn's lines are cached by identity, width, and the two view toggles
+that change them (`ctrl+o` and `/thinking`), so a frame re-renders only what
+changed. Measured with `npm run bench` (Node 26, 200x60 window, five segments
+per assistant turn):
 
 | Transcript | Before the message cache | Now |
 |---|---|---|
-| 400 messages | 25.3 ms/frame | **0.16 ms/frame** |
+| 400 messages | 25.3 ms/frame | **0.20 ms/frame** |
 
 A full scroll or a spinner tick therefore costs a fraction of the 80 ms it has
 between paints, which is what makes a long session stay smooth. The benchmark
@@ -688,7 +718,7 @@ regression still would.
     provider parses the real command line.
   - `dsh --profile tui </dev/null` boots the bundle and exits on the non-TTY
     guard.
-- **29 suites, 1451 assertions**, covering rendering (including a pty round
+- **29 suites, 1460 assertions**, covering rendering (including a pty round
   trip through the real screen, decoder, and frame renderer), streaming
   projection, queueing, steering, persistence, session storage, cross-session
   search, the panels, the plugin seam, i18n, the fleet, and the render cache.

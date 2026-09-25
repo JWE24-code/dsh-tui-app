@@ -6,34 +6,40 @@
  * @module
  */
 
-import type { Message } from './state.ts'
+import { messageText, type Message } from './state.ts'
 
 /**
  * Render a transcript as markdown.
  *
- * User turns become `## >`-quoted sections and assistant turns `##` sections,
- * with tool activity summarised as a list so the exported document says what
- * the agent did, not just what it said.
+ * User turns become `## >`-quoted sections and assistant turns `##` sections.
+ * An assistant turn is written in the order it happened — each tool call as a
+ * checklist line between the prose it came between — because a document that
+ * collects the calls at the end tells you what the agent did but not when, and
+ * the reason it said the next thing is usually what the call returned.
  */
 export function transcriptMarkdown(messages: readonly Message[], title: string): string {
   const lines: string[] = [`# ${title === '' ? 'dsh transcript' : title}`, '']
   for (const message of messages) {
     if (message.role === 'user') {
-      lines.push('## >', '', ...indented(message.content), '')
+      lines.push('## >', '', ...indented(messageText(message)), '')
       continue
     }
     const label = message.command === undefined ? '' : ` (${message.command.ok ? 'ok' : 'failed'})`
-    lines.push(`## assistant${label}`, '', ...message.content.split('\n'), '')
+    lines.push(`## assistant${label}`, '')
     if (message.reasoning !== undefined && message.reasoning !== '') {
       lines.push('<details><summary>thinking</summary>', '', '```', ...message.reasoning.split('\n'), '```', '', '</details>', '')
     }
-    if (message.tools !== undefined && message.tools.length > 0) {
-      lines.push('**Tools**', '')
-      for (const tool of message.tools) {
-        const mark = tool.status === 'ok' ? 'x' : tool.status === 'error' ? ' ' : '~'
-        lines.push(`- [${mark}] \`${tool.name}\`${tool.detail === undefined ? '' : ` — ${tool.detail}`}`)
+    for (const segment of message.segments) {
+      if (segment.kind === 'text') {
+        if (segment.text.trim() !== '') lines.push(...segment.text.trim().split('\n'), '')
+        continue
       }
-      lines.push('')
+      const tool = segment.tool
+      const mark = tool.status === 'ok' ? 'x' : tool.status === 'error' ? ' ' : '~'
+      lines.push(
+        `- [${mark}] \`${tool.name}\`${tool.detail === undefined ? '' : ` — ${tool.detail}`}`,
+        '',
+      )
     }
   }
   return `${lines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd()}\n`

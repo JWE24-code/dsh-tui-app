@@ -19,10 +19,14 @@ import {
   estimateTokens,
   formatTokens,
   MAX_INPUT_LINES,
+  messageText,
+  messageTools,
+  segmentsText,
   type Message,
   type Palette,
   type BackgroundAgent,
   type Picker,
+  type Segment,
   type SessionSummary,
   type ToolActivity,
 } from './state.ts'
@@ -68,9 +72,9 @@ export interface Snapshot {
   host: string
   modelName: string
   messages: readonly Message[]
-  streamingText: string
+  /** The turn streaming in, prose and calls in arrival order. */
+  streamingSegments: readonly Segment[]
   streamingReasoning: string
-  streamingTools: readonly ToolActivity[]
   streaming: boolean
   spinner: string
   status: string
@@ -296,94 +300,47 @@ interface ToolStyle {
 }
 
 /**
- * Tool activity for one turn.
+ * One tool call, where it happened.
  *
- * Collapsed is the default: a long agent turn is mostly `bash bash grep read`,
- * and a column of those pushes the actual answer off the screen. While the
- * turn runs it is one animated line naming the tool in flight and what it is
- * doing; once settled it is one line with a count and a breakdown. `ctrl+o`
- * expands the full list, each call followed by its outcome in flow — the
- * result line sits under the very call that produced it.
+ * A call is one line — its mark, its name, and what it does — so it reads as a
+ * step the agent took between two things it said, and the prose on either side
+ * keeps its own shape. `ctrl+o` adds each call's outcome underneath the very
+ * call that produced it. The call in flight carries the spinner and its elapsed
+ * time instead of a status mark.
  */
-function renderTools(
-  tools: readonly ToolActivity[],
-  width: number,
-  toolStyle: ToolStyle,
-): string[] {
-  if (tools.length === 0) return []
-
-  const mark = (tool: ToolActivity): string =>
+function renderTool(tool: ToolActivity, width: number, toolStyle: ToolStyle): string[] {
+  const mark =
     tool.status === 'running'
-      ? style('●', { fg: colGreen })
+      ? toolStyle.spinner === ''
+        ? style('●', { fg: colGreen })
+        : style(toolStyle.spinner, { fg: colAccent })
       : tool.status === 'ok'
         ? ok('✓')
         : warn('✗')
 
-  /** The "what it does" tail of a head line: the command, the path, the query. */
-  const detailPart = (tool: ToolActivity): string =>
+  // The elapsed time belongs to the call in hand, not to the turn: it is the
+  // one number that says "this is still going" rather than "this took a while".
+  const elapsed =
+    tool.status === 'running' && toolStyle.elapsed > 0
+      ? muted(`  ${formatElapsed(toolStyle.elapsed)}`)
+      : ''
+
+  const detail =
     tool.detail === undefined || tool.detail === ''
       ? ''
-      : muted(`  ${truncate(tool.detail, Math.max(width - displayWidth(tool.name) - 8, 8))}`)
-
-  /** One call's head line: mark, name, and what the call does. */
-  const headLine = (tool: ToolActivity): string =>
-    `${mark(tool)} ${style(tool.name, { fg: colText })}${detailPart(tool)}`
-
-  /** The call's outcome, if any, to sit under its own head line — in flow. */
-  const outcomeLine = (tool: ToolActivity): string | undefined =>
-    tool.result === undefined || tool.result === ''
-      ? undefined
-      : (tool.status === 'error' ? warn : muted)(
-          `  ↳ ${truncate(tool.result, Math.max(width - 4, 8))}`,
+      : muted(
+          `  ${truncate(tool.detail, Math.max(width - displayWidth(tool.name) - displayWidth(elapsed) - 8, 8))}`,
         )
 
-  const linesOf = (tool: ToolActivity): string[] => {
-    const under = outcomeLine(tool)
-    return under === undefined ? [headLine(tool)] : [headLine(tool), under]
-  }
+  const head = truncate(`${mark} ${style(tool.name, { fg: colText })}${detail}${elapsed}`, width)
+  if (!toolStyle.expand) return [head]
 
-  if (toolStyle.expand) {
-    return tools.flatMap(linesOf)
-  }
-
-  const running = tools.find((tool) => tool.status === 'running')
-  const failed = tools.filter((tool) => tool.status === 'error').length
-
-  if (running !== undefined) {
-    // In flight: spinner, the tool in hand doing something, progress, time.
-    const done = tools.filter((tool) => tool.status !== 'running').length
-    const parts = [headLine(running)]
-    if (done > 0) parts.push(muted(`${done} done`))
-    if (toolStyle.elapsed > 0) parts.push(muted(`${formatElapsed(toolStyle.elapsed)}`))
-    return [`${style(toolStyle.spinner, { fg: colAccent })} ${parts.join(muted('  ·  '))}`]
-  }
-
-  const head = failed > 0 ? warn('✗') : ok('✓')
-  const tail = failed > 0 ? warn(`  ${String(failed)} failed`) : ''
-
-  // A single call needs no summarizing: it says what it did and what came
-  // back, which is shorter than counting it and hides nothing an expansion
-  // would reveal.
-  const only = tools[0]
-  if (tools.length === 1 && only !== undefined) {
-    const first = truncate(
-      `${head} ${style(only.name, { fg: colText })}${detailPart(only)}${tail}`,
-      width,
-    )
-    const under = outcomeLine(only)
-    return under === undefined ? [first] : [first, under]
-  }
-
-  // Settled: one line, with the busiest tools named.
-  const counts = new Map<string, number>()
-  for (const tool of tools) counts.set(tool.name, (counts.get(tool.name) ?? 0) + 1)
-  const breakdown = [...counts.entries()]
-    .sort((left, right) => right[1] - left[1])
-    .slice(0, 4)
-    .map(([name, count]) => (count > 1 ? `${name} ×${String(count)}` : name))
-    .join(', ')
-  const line = `${head} ${style(`${String(tools.length)} tools`, { fg: colText })}${muted(`  ${breakdown}`)}${tail}`
-  return [truncate(line, width), muted('  ctrl+o for detail')]
+  const result = tool.result ?? ''
+  if (result === '') return [head]
+  const under = (tool.status === 'error' ? warn : muted)(
+    `  ↳ ${truncate(result, Math.max(width - 4, 8))}`,
+  )
+  return [head, under]
 }
 
 /** Seconds as a compact duration: 8s, 1m12s. */
@@ -418,7 +375,7 @@ function renderMessageBody(
 
   if (message.role === 'user') {
     const bar = style('▌', { fg: message.steering === true ? colMuted : colAccent })
-    for (const line of wrap(message.content.replace(/\s+$/, ''), width - 2)) {
+    for (const line of wrap(messageText(message), width - 2)) {
       out.push(message.steering === true ? `${bar} ${muted(line)}` : `${bar} ${style(line, { fg: colText })}`)
     }
     if ((message.attachments ?? []).length > 0) {
@@ -434,7 +391,7 @@ function renderMessageBody(
     const mark = message.command.ok ? ok('✓') : warn('✗')
     const label = style(`/${message.command.name}`, { fg: colAccent })
     out.push(`${mark} ${label}`)
-    for (const line of wrap(message.content, width - 2)) {
+    for (const line of wrap(messageText(message), width - 2)) {
       out.push(`  ${muted(line)}`)
     }
     return out
@@ -448,12 +405,29 @@ function renderMessageBody(
     if (out.length > 0) out.push('')
   }
 
-  out.push(...renderTools(message.tools ?? [], width, toolStyle))
-  if ((message.tools ?? []).length > 0 && message.content.trim() !== '') out.push('')
-
-  if (message.content.trim() !== '') {
-    out.push(...renderMarkdown(message.content, width).split('\n'))
+  // The turn in the order it happened: what the agent said, the call it made,
+  // what it said next. Each piece is rendered as itself and separated by a
+  // blank line, so neither the prose nor the calls run together.
+  for (const segment of message.segments) {
+    const lines =
+      segment.kind === 'tool'
+        ? renderTool(segment.tool, width, toolStyle)
+        : segment.text.trim() === ''
+          ? []
+          : renderMarkdown(segment.text.trim(), width).split('\n')
+    if (lines.length === 0) continue
+    if (out.length > 0) out.push('')
+    out.push(...lines)
   }
+
+  // The collapsed summary used to be what advertised ctrl+o. Now that calls
+  // render in place there is no summary, so the hint goes where it is still
+  // true: once per turn, and only when expanding would actually reveal
+  // something that is currently hidden.
+  const hidden =
+    !toolStyle.expand &&
+    messageTools(message).some((tool) => tool.result !== undefined && tool.result !== '')
+  if (hidden) out.push(muted('  ctrl+o for detail'))
   return out
 }
 
@@ -464,10 +438,19 @@ function renderMessageBody(
  * A frame only ever shows a window of a long transcript, but the viewport is
  * sliced from fully rendered lines — so without this cache every paint
  * re-rendered and re-highlighted the entire conversation. Messages are
- * immutable once committed, and the width is part of the key, so a hit is
- * always correct; a resize simply misses.
+ * immutable once committed, so the rest of the key is everything outside the
+ * message that changes its lines: the width, and the two view toggles. Leaving
+ * the toggles out made `ctrl+o` and `/thinking` no-ops on every settled turn —
+ * they flipped the flag and the cache handed back the old frame.
  */
-const messageLineCache = new WeakMap<Message, { width: number; lines: string[] }>()
+interface CachedLines {
+  width: number
+  expand: boolean
+  showThinking: boolean
+  lines: string[]
+}
+
+const messageLineCache = new WeakMap<Message, CachedLines>()
 
 /** Render one message through the cache. */
 function cachedMessageLines(
@@ -479,14 +462,21 @@ function cachedMessageLines(
 ): string[] {
   // A streaming turn animates and a selected turn carries a bar, so neither
   // may be served from the cache of its unmarked form.
-  const animating = toolStyle.spinner !== '' && (message.tools ?? []).length > 0
+  const animating = toolStyle.spinner !== '' && messageTools(message).length > 0
   if (animating || selected) {
     return renderMessage(message, width, showThinking, toolStyle, selected)
   }
   const hit = messageLineCache.get(message)
-  if (hit !== undefined && hit.width === width) return hit.lines
+  if (
+    hit !== undefined &&
+    hit.width === width &&
+    hit.expand === toolStyle.expand &&
+    hit.showThinking === showThinking
+  ) {
+    return hit.lines
+  }
   const lines = renderMessage(message, width, showThinking, toolStyle)
-  messageLineCache.set(message, { width, lines })
+  messageLineCache.set(message, { width, expand: toolStyle.expand, showThinking, lines })
   return lines
 }
 
@@ -514,9 +504,8 @@ function transcript(snapshot: Snapshot, width: number): string[] {
     const running = renderMessage(
       {
         role: 'assistant',
-        content: snapshot.streamingText,
+        segments: snapshot.streamingSegments,
         reasoning: snapshot.streamingReasoning,
-        tools: snapshot.streamingTools,
       },
       width,
       snapshot.showThinking,
@@ -889,7 +878,7 @@ function footer(snapshot: Snapshot, width: number): string {
   const used = snapshot.haveUsage
     ? snapshot.totalTokens
     : estimateTokens(
-        snapshot.messages.map((message) => message.content).join('\n') + snapshot.streamingText,
+        snapshot.messages.map(messageText).join('\n') + segmentsText(snapshot.streamingSegments),
       )
   const percent = snapshot.contextLimit > 0 ? Math.floor((used * 100) / snapshot.contextLimit) : 0
   const approx = snapshot.haveUsage ? '' : '~'
