@@ -107,6 +107,7 @@ overrides background detection; `NO_COLOR` disables styling.
 | `@` | File completion over the workspace · `tab`/`enter` accepts · `esc` dismisses |
 | `?` | Open the key reference on an empty composer |
 | `esc` | Interrupt a streaming reply |
+| `alt+e` | Edit the draft in `$VISUAL`/`$EDITOR` · non-zero exit keeps it |
 | `tab` | While a reply streams: queue the prompt for after it |
 | `ctrl+enter` | Interrupt the reply and send now (needs a terminal that reports it) |
 | `ctrl+n` / `ctrl+r` / `ctrl+t` | New session · resume · toggle thinking |

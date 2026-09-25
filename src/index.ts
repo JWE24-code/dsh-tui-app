@@ -11,6 +11,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { spawn } from 'node:child_process'
 import { homedir, tmpdir } from 'node:os'
 import { readFile, unlink, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, resolve } from 'node:path'
@@ -1724,6 +1725,9 @@ class TuiApp {
       case 'wheeldown':
         this.scroll(3)
         break
+      case 'alt+e':
+        void this.editDraft()
+        break
       case 'alt+n':
         this.selectSession((this.active + 1) % this.tabs.length)
         break
@@ -2186,6 +2190,50 @@ class TuiApp {
 
   private async send(text: string): Promise<void> {
     await this.sendTo(this.tab, { text, images: [] })
+  }
+
+  /**
+   * Round-trip the draft through `$VISUAL`/`$EDITOR`.
+   *
+   * The screen leaves the alternate buffer for the duration — the editor owns
+   * the terminal — and comes back with the frame repainted. A non-zero exit
+   * keeps the draft untouched (the `:cq` convention), and neither variable
+   * being set is a status line, not a `vi` fallback nobody asked for.
+   */
+  private async editDraft(): Promise<void> {
+    const editor = process.env['VISUAL'] ?? process.env['EDITOR']
+    if (editor === undefined || editor.trim() === '') {
+      this.setStatus('set $VISUAL or $EDITOR to edit the draft outside')
+      this.paint()
+      return
+    }
+    const file = join(tmpdir(), `dsh-tui-draft-${String(process.pid)}.md`)
+    await writeFile(file, `${this.composer.value()}\n`)
+    this.screen.stop()
+    try {
+      const code = await new Promise<number>((resolve, reject) => {
+        const child = spawn(editor, [file], { stdio: 'inherit' })
+        child.on('error', reject)
+        child.on('exit', (exitCode) => {
+          resolve(exitCode ?? 0)
+        })
+      })
+      if (code === 0) {
+        const edited = (await readFile(file, 'utf8')).replace(/\n$/, '')
+        this.composer.setValue(edited)
+        this.history.reset()
+        this.atMenu.close()
+      } else {
+        this.setStatus('editor exited non-zero — draft kept')
+      }
+    } catch (error) {
+      this.setStatus(describeError(error), true)
+    } finally {
+      await unlink(file).catch(() => {})
+      this.screen.start()
+      this.updateAtMenu()
+      this.paint()
+    }
   }
 
   /** Send a materialized prompt to the active session. */
