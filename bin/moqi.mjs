@@ -6,8 +6,14 @@
  * Works identically from a git checkout and a global npm install — the
  * package root is resolved from this file's own location, and the profile's
  * `link:` dependency points at whichever copy is running.
+ *
+ * Arguments are read before anything is written. Installing the profile
+ * rewrites `$DSH_HOME/profiles/tui` and repoints it at whichever copy of the
+ * package is running, so `moqi --help` used to hijack a working profile just
+ * by asking what the flags were.
  */
 import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -15,6 +21,38 @@ const here = dirname(fileURLToPath(import.meta.url))
 const root = resolve(here, '..')
 
 const args = process.argv.slice(2)
+
+/** The launcher's own flags, which never reach dsh and never touch the disk. */
+const asks = (...names) => args.some((arg) => names.includes(arg))
+
+if (asks('-h', '--help')) {
+  const { name } = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'))
+  console.log(
+    [
+      'moqi — the unspoken understanding between you and your harness.',
+      '',
+      'Usage:',
+      '  moqi [dsh flags…]   install or refresh the tui profile, then start it',
+      '  moqi install        install or refresh the profile and stop',
+      '  moqi --help         this message',
+      '  moqi --version      the installed version',
+      '',
+      'Flags other than these are passed to dsh, so the app\'s own options',
+      '(--resume, --model, --thinking, --mouse, --peer, …) work as documented.',
+      'For that list, run:  dsh --profile tui --help',
+      '',
+      `Installed from ${name}; the profile it manages is $DSH_HOME/profiles/tui.`,
+    ].join('\n'),
+  )
+  process.exit(0)
+}
+
+if (asks('-v', '--version')) {
+  const { version } = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'))
+  console.log(version)
+  process.exit(0)
+}
+
 const command = args[0] === 'install' ? 'install' : 'run'
 
 try {

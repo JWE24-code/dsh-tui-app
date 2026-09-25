@@ -4,7 +4,25 @@ All notable changes to Moqi are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.1]
+
+### Fixed
+
+- **`moqi --help` rewrote your profile.** The launcher ran the profile
+  installer before it looked at its arguments, so any invocation — including
+  one that only asked what the flags were — rewrote `$DSH_HOME/profiles/tui`
+  and repointed it at whichever copy of the package was running. Installing the
+  published tarball into a scratch prefix and running `moqi --help` against it
+  was enough to hijack a working development profile, which is exactly how this
+  was found. Arguments are read first now: `--help` and `--version` print and
+  exit, touching nothing. `--help` is the launcher's own, rather than dsh's
+  help arriving after an unannounced install.
+
+  `tests/launcher-smoke.ts` asserts the absence of the side effect rather than
+  the presence of the text, because the text was never the broken part — the
+  old launcher printed help too, just after installing.
+
+## [0.2.0]
 
 ### Added
 
