@@ -1,5 +1,5 @@
 {
-  "name": "moqi",
+  "name": "moqi-tui",
   "version": "0.2.0",
   "description": "Moqi — the unspoken understanding between you and your harness. A terminal app for DeepSeek Harness: bordered composer, live token counter, slash palette, markdown transcript with syntax-highlighted code.",
   "type": "module",

@@ -6,7 +6,7 @@
  * name. Deciding here keeps `index.ts` down to wiring, so the suite can cover
  * every branch without a Harness behind it.
  *
- * @module moqi/rename
+ * @module moqi-tui/rename
  */
 
 /** The tab-label budget: the automatic first-prompt title uses the same cap. */

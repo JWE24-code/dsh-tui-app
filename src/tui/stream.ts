@@ -8,7 +8,7 @@
  * chunk sequence can be replayed in a dependency-free test (see
  * `tests/stream-smoke.ts`) the same way `render-smoke.ts` exercises `view.ts`.
  *
- * @module moqi/tui/stream
+ * @module moqi-tui/tui/stream
  */
 
 import type { Segment, ToolActivity } from './state.ts'

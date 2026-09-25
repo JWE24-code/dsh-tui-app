@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to `moqi` are documented here. The format follows
+All notable changes to Moqi are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
@@ -148,10 +148,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - **The app is now Moqi** — 默契, the unspoken understanding between you and
-  your harness. The package is the unscoped `moqi`, the binary is `moqi`, the
-  in-app mark reads `◆ moqi`, and the environment variables move from
-  `DSH_TUI_*` to `MOQI_*`. The harness's own `DSH_HOME` and `DSH_HOST` are
-  untouched, because they are not ours to rename.
+  your harness. The command is `moqi`, the in-app mark reads `◆ moqi`, and the
+  environment variables move from `DSH_TUI_*` to `MOQI_*`. The harness's own
+  `DSH_HOME` and `DSH_HOST` are untouched, because they are not ours to rename.
+
+  It publishes as **`moqi-tui`**: npm's similarity filter rejects the bare
+  `moqi` as too close to `mobx`, `mri`, `joi` and `poi`. The install name and
+  the command are separate things, so the suffix lives in `npm install -g
+  moqi-tui` and nowhere a user types afterwards. npm's own suggestion was to
+  scope it instead, but the scope it proposed contained a `!` — a character
+  package names cannot hold — because it is generated from the account name.
 
   Both earlier names were already taken on npm by other DeepSeek Harness
   terminals: `dsh-tui-app`, a dormant v0.0.1 stub, and `dsh-tui`, active at
@@ -220,7 +226,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   so `npm test` could not load it from the bare `npm ci` that CI runs —
   every push had failed since the `tuiHost` seam landed. The seam's plain
   classes moved to `src/tui-host-core.ts`, which the suite imports and
-  `src/tui-host.ts` re-exports, so `moqi/tui-host` still
+  `src/tui-host.ts` re-exports, so `moqi-tui/tui-host` still
   exports exactly what it did. A development checkout could not reproduce any
   of this, because `npm run link-types` makes the import resolve, so
   `tests/offline-imports-smoke.ts` now walks the import graph of every suite

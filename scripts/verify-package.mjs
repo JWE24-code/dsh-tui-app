@@ -86,7 +86,7 @@ try {
   check(
     'the profile composes dsh-base then this bundle',
     manifest.dsh?.profile?.bundles?.join(',') ===
-      '@deepseek-ai/dsh-base,moqi',
+      '@deepseek-ai/dsh-base,moqi-tui',
   )
 
   // The regression this gate exists for: the linked package must be able to
@@ -99,7 +99,7 @@ try {
   // Compose the tree, then boot. A resolve failure shows up here as a crash;
   // the app's own non-TTY guard is the success signal.
   const composed = run('dsh', ['--profile', 'tui', '--dump-config'], { env: environment })
-  check('the profile composes', composed.includes('moqi'))
+  check('the profile composes', composed.includes('moqi-tui'))
   const help = run('dsh', ['--profile', 'tui', '--help'], { env: environment })
   check("the app's own flags are parsed", help.includes('--peer') && help.includes('--mouse'))
 

@@ -4,7 +4,7 @@
  * It parses this app's own flags out of the shared immutable cmdline snapshot
  * and publishes them as a service, so the app row can consume them lazily —
  * the same shape the shipped headless bundle uses.
- * @module moqi/startup
+ * @module moqi-tui/startup
  */
 
 import { Command } from 'commander'
