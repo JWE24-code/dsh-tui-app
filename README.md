@@ -122,6 +122,8 @@ overrides background detection; `NO_COLOR` disables styling.
 | `?` | Open the key reference on an empty composer |
 | `esc` | Interrupt a streaming reply |
 | `alt+e` | Edit the draft in `$VISUAL`/`$EDITOR` · non-zero exit keeps it |
+| `alt+↑`/`alt+↓` | Select a transcript turn (gold bar) · `esc` clears |
+| `alt+c` | Copy the selected turn over OSC 52 |
 | `tab` | While a reply streams: queue the prompt for after it |
 | `ctrl+enter` | Interrupt the reply and send now (needs a terminal that reports it) |
 | `ctrl+n` / `ctrl+r` / `ctrl+t` | New session · resume · toggle thinking |

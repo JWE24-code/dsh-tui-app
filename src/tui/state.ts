@@ -527,6 +527,23 @@ export function ownerOfDelegated(
   return activeIndex >= 0 && activeIndex < sessions.length ? activeIndex : 0
 }
 
+/**
+ * Walk a transcript selection.
+ *
+ * There is no selection until the first key: `alt+↑`/`alt+↓` then start at the
+ * newest turn and move, clamped at both ends and empty when there is nothing
+ * to select.
+ */
+export function moveSelection(
+  current: number | undefined,
+  delta: number,
+  count: number,
+): number | undefined {
+  if (count <= 0) return undefined
+  if (current === undefined) return count - 1
+  return Math.min(Math.max(current + delta, 0), count - 1)
+}
+
 /** Format a token count the way a status bar wants it: 834, 1.2K, 64K. */
 export function formatTokens(count: number): string {
   if (count < 1000) return String(count)

@@ -127,6 +127,11 @@ export interface Snapshot {
    * open it owns the keyboard and replaces the transcript.
    */
   panel?: PanelView
+  /**
+   * Index of the transcript turn under selection, marked with a gold bar.
+   * Optional so every existing snapshot builder renders exactly as before.
+   */
+  selectedTurn?: number
 }
 
 /** What push-to-talk is doing, for the footer indicator. */
@@ -375,6 +380,22 @@ function renderMessage(
   width: number,
   showThinking: boolean,
   toolStyle: ToolStyle,
+  selectedTurn = false,
+): string[] {
+  const content = renderMessageBody(message, width, showThinking, toolStyle)
+  if (!selectedTurn) return content
+  // A selection is a frame, not a repaint: the gold bar marks the turn whose
+  // text `alt+c` would copy without disturbing any of the turn's own styling.
+  const bar = style('▏', { fg: colGold })
+  return content.map((line) => `${bar}${line}`)
+}
+
+/** One turn's lines, without selection decoration. */
+function renderMessageBody(
+  message: Message,
+  width: number,
+  showThinking: boolean,
+  toolStyle: ToolStyle,
 ): string[] {
   const out: string[] = []
 
@@ -430,10 +451,16 @@ function transcript(snapshot: Snapshot, width: number): string[] {
   }
 
   const blocks: string[][] = []
-  for (const message of snapshot.messages) {
-    const rendered = renderMessage(message, width, snapshot.showThinking, settled)
+  snapshot.messages.forEach((message, index) => {
+    const rendered = renderMessage(
+      message,
+      width,
+      snapshot.showThinking,
+      settled,
+      snapshot.selectedTurn === index,
+    )
     if (rendered.length > 0) blocks.push(rendered)
-  }
+  })
   if (snapshot.streaming) {
     const running = renderMessage(
       {
@@ -1033,8 +1060,8 @@ export const HELP_TEXT = [
   '- `ctrl+n` — new session · `ctrl+r` — resume · `ctrl+t` — toggle thinking',
   '- `pgup` / `pgdn` — page · `shift+↑` / `shift+↓` — one line · `ctrl+g` — newest',
   '- `ctrl+↑` / `ctrl+↓` — half page · `ctrl+u` — clear the composer',
-  '- `alt+e` — edit the draft in $VISUAL/$EDITOR · `ctrl+o` — tool calls',
-  '- `ctrl+x` — compact the session · `ctrl+b` — background agents',
+  '- `alt+e` — edit draft · `alt+↑`/`alt+↓` select a turn · `alt+c` — copy it',
+  '- `ctrl+o` — tool calls · `ctrl+x` — compact · `ctrl+b` — background agents',
   '- `ctrl+y` — copy the last reply · `ctrl+f` — every device · `ctrl+v` — push to talk',
   '- `?` — open this help on an empty composer',
   '',

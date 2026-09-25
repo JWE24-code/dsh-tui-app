@@ -40,6 +40,7 @@ import {
   InputHistory,
   Palette,
   Picker,
+  moveSelection,
   ownerOfDelegated,
   queueShouldDrain,
   type Message,
@@ -349,6 +350,8 @@ class TuiApp {
   private readonly picker = new Picker()
   /** The `@` file-completion menu, driven by the composer like the palette. */
   private readonly atMenu = new AtMenu()
+  /** Index of the transcript turn under selection, if any. */
+  private selectedTurn: number | undefined
   /** The trust-surface panel on screen, if any: it owns the keyboard. */
   private panel: ApprovalPanel | QuestionsPanel | undefined
   private readonly pendingApprovals: PendingApproval[] = []
@@ -1182,6 +1185,7 @@ class TuiApp {
       searchActive: this.search !== undefined,
       fleet: this.fleet,
       panel: this.panel?.view(),
+      selectedTurn: this.selectedTurn,
       voice: this.voicePhase,
     }
   }
@@ -1729,6 +1733,10 @@ class TuiApp {
         // A live microphone outranks everything else esc can dismiss: it is
         // the most modal state the app has, and the one to get out of first.
         if (this.voicePhase !== undefined) this.cancelVoice()
+        else if (this.selectedTurn !== undefined) {
+          this.selectedTurn = undefined
+          this.setStatus('')
+        }
         else if (this.atMenu.open) {
           // Only the completion menu closes; the token stays for typing.
           this.atDismissed = this.atMenu.query
@@ -1965,6 +1973,15 @@ class TuiApp {
         break
       case 'alt+e':
         void this.editDraft()
+        break
+      case 'alt+up':
+        this.moveSelection(-1)
+        break
+      case 'alt+down':
+        this.moveSelection(1)
+        break
+      case 'alt+c':
+        this.copySelectedTurn()
         break
       case 'alt+n':
         this.selectSession((this.active + 1) % this.tabs.length)
@@ -2276,6 +2293,43 @@ class TuiApp {
       }
     }
     return undefined
+  }
+
+  /**
+   * Move the transcript selection, starting at the newest turn.
+   *
+   * The selection is a marker, not a scroll: the turn it marks copies with
+   * `alt+c`, and `esc` clears it before anything else esc can dismiss.
+   */
+  private moveSelection(delta: number): void {
+    const next = moveSelection(this.selectedTurn, delta, this.tab.messages.length)
+    if (next === undefined) {
+      this.setStatus('nothing to select yet')
+      this.paint()
+      return
+    }
+    this.selectedTurn = next
+    const message = this.tab.messages[next]
+    const what = message?.role === 'user' ? 'your prompt' : 'the reply'
+    this.setStatus(`${String(next + 1)}/${String(this.tab.messages.length)}: ${what} selected · alt+c copies · esc clears`)
+    this.paint()
+  }
+
+  /** Copy the selected turn's text over the same OSC 52 path as `/copy`. */
+  private copySelectedTurn(): void {
+    const message = this.selectedTurn === undefined ? undefined : this.tab.messages[this.selectedTurn]
+    if (message === undefined) {
+      this.setStatus('nothing selected — alt+↑ or alt+↓ picks a turn')
+      this.paint()
+      return
+    }
+    const result = this.writeClipboard(message.content)
+    if (result.ok) {
+      this.setStatus(`copied the selected turn${result.truncated ? ' (truncated)' : ''}`)
+    } else {
+      this.setStatus(`copy failed: ${result.error}`, true)
+    }
+    this.paint()
   }
 
   /**
