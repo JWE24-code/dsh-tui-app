@@ -52,7 +52,7 @@ function check(label: string, condition: boolean): void {
   checks += 1
 }
 
-const sandbox = await mkdtemp(join(tmpdir(), 'dsh-tui-persist-'))
+const sandbox = await mkdtemp(join(tmpdir(), 'moqi-persist-'))
 const env = { DSH_HOME: sandbox }
 
 try {

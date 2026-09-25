@@ -119,11 +119,11 @@ export interface VoiceOptions {
   model?: string
   /** `--voice-bin`, an explicit path to or name of the whisper executable. */
   binary?: string
-  /** `DSH_TUI_WHISPER_MODEL`, the same thing from the environment. */
+  /** `MOQI_WHISPER_MODEL`, the same thing from the environment. */
   envModel?: string
-  /** `DSH_TUI_WHISPER_BIN`, the same thing from the environment. */
+  /** `MOQI_WHISPER_BIN`, the same thing from the environment. */
   envBinary?: string
-  /** `DSH_TUI_WHISPER_LANG`; absent lets whisper use its own default. */
+  /** `MOQI_WHISPER_LANG`; absent lets whisper use its own default. */
   language?: string
 }
 
@@ -270,7 +270,7 @@ export function voiceGapMessage(gap: VoiceGap): string {
     case 'recorder':
       return 'no recorder — run: npm run setup-voice, or install alsa-utils or sox'
     case 'binary':
-      return 'no whisper binary — run: npm run setup-voice, or set DSH_TUI_WHISPER_BIN'
+      return 'no whisper binary — run: npm run setup-voice, or set MOQI_WHISPER_BIN'
     case 'binary-missing':
       return `no whisper binary at ${gap.path} — fix ${sourceLabel(gap.source, 'bin')}`
     case 'model-missing':
@@ -283,7 +283,7 @@ export function voiceGapMessage(gap: VoiceGap): string {
 /** Name the knob that produced a bad path, so the fix is unambiguous. */
 function sourceLabel(source: 'flag' | 'env', which: 'bin' | 'model'): string {
   if (source === 'flag') return which === 'bin' ? '--voice-bin' : '--voice-model'
-  return which === 'bin' ? 'DSH_TUI_WHISPER_BIN' : 'DSH_TUI_WHISPER_MODEL'
+  return which === 'bin' ? 'MOQI_WHISPER_BIN' : 'MOQI_WHISPER_MODEL'
 }
 
 /**
@@ -393,9 +393,9 @@ export function systemProbe(env: NodeJS.ProcessEnv = process.env): VoiceProbe {
 /** Read the environment half of the configuration. */
 export function voiceOptionsFromEnv(env: NodeJS.ProcessEnv = process.env): VoiceOptions {
   return {
-    envModel: env['DSH_TUI_WHISPER_MODEL'],
-    envBinary: env['DSH_TUI_WHISPER_BIN'],
-    language: env['DSH_TUI_WHISPER_LANG'],
+    envModel: env['MOQI_WHISPER_MODEL'],
+    envBinary: env['MOQI_WHISPER_BIN'],
+    language: env['MOQI_WHISPER_LANG'],
   }
 }
 

@@ -1,12 +1,18 @@
-# dsh-tui
+# Moqi
 
-An opencode-style terminal app for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness),
+*默契 — the unspoken understanding between you and your harness.*
+
+A terminal app for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness),
 packaged as a Harness bundle. It is the rebuild of an earlier standalone Go
 client, reimplemented as a first-class `dsh` profile so it drives the real
 Harness agent instead of a private HTTP API.
 
+The name is the point of the thing: a good terminal agent is one you stop
+having to explain yourself to. Moqi keeps the conversation in the order it
+happened, puts each tool call where it was made, and gets out of the way.
+
 ```
- ◆ dsh  tail docker logs                                              local harness
+ ◆ moqi  tail docker logs                                              local harness
 
  ▌ how do i tail the last 50 lines of a container log?
 
@@ -45,12 +51,12 @@ From npm — one command, then the launcher installs the profile and hands the
 terminal to dsh:
 
 ```sh
-npm install -g @jwe24-code/dsh-tui
-dsh-tui
+npm install -g moqi
+moqi
 ```
 
-`dsh-tui install` only refreshes the profile, and
-`dsh plugin --profile tui add @jwe24-code/dsh-tui` works too. `/update`
+`moqi install` only refreshes the profile, and
+`dsh plugin --profile tui add moqi` works too. `/update`
 inside the app checks npm and upgrades the global install.
 
 The installer also links the installed Harness's own `@deepseek-ai` packages
@@ -86,7 +92,7 @@ $DSH_HOME/profiles/tui/         # $DSH_HOME defaults to ~/.dsh
 with the bundle order the profile composes:
 
 ```json
-"dsh": { "profile": { "bundles": ["@deepseek-ai/dsh-base", "dsh-tui"] } }
+"dsh": { "profile": { "bundles": ["@deepseek-ai/dsh-base", "moqi"] } }
 ```
 
 Pass a name to install under a different profile: `npm run install-profile -- chat`.
@@ -116,7 +122,7 @@ npm run typecheck
 | `--no-restore` | Start with one empty session instead of reopening the last ones |
 | `--version` | Print the app version — shadowed by the launcher's own `--version`, so use `/about` inside the app |
 
-`DSH_TUI_CONTEXT_LIMIT` sets the same budget; `DSH_TUI_THEME=light\|dark`
+`MOQI_CONTEXT_LIMIT` sets the same budget; `MOQI_THEME=light\|dark`
 overrides background detection; `NO_COLOR` disables styling.
 
 ## Keys
@@ -291,9 +297,9 @@ weights are a 140MB download — which is why they are a setup step rather than
 part of `npm install`.
 
 To point at your own build or weights, `--voice-bin` and `--voice-model` win,
-then `DSH_TUI_WHISPER_BIN` and `DSH_TUI_WHISPER_MODEL`, then a search of PATH
+then `MOQI_WHISPER_BIN` and `MOQI_WHISPER_MODEL`, then a search of PATH
 and of `~/.cache/whisper`, `~/.local/share/whisper` and the two
-`share/whisper.cpp` directories. `--voice-lang` or `DSH_TUI_WHISPER_LANG` sets
+`share/whisper.cpp` directories. `--voice-lang` or `MOQI_WHISPER_LANG` sets
 the language; without one, whisper decides.
 
 When a piece is missing the footer names which one and the command that fixes
@@ -473,7 +479,7 @@ switches straight away.
 
 Every palette defines both a light and a dark variant, because *which* palette
 is in force and *which background* it is drawn against are separate questions.
-`DSH_TUI_THEME=light|dark` still forces the variant (the `COLORFGBG`
+`MOQI_THEME=light|dark` still forces the variant (the `COLORFGBG`
 convention decides otherwise, and dark is the fallback), and `NO_COLOR` or
 `TERM=dumb` still turns color off entirely — under those the theme has nothing
 to do and picking one changes nothing.
@@ -661,7 +667,7 @@ src/
 `src/tui/` imports nothing from the Harness and nothing from npm, which is why
 it can be tested without a profile. `src/tui-host.ts` is the one module that
 does import Cordis, because it *is* the seam (exported as
-`@jwe24-code/dsh-tui/tui-host`); the shortcut registry and status line it
+`moqi/tui-host`); the shortcut registry and status line it
 delegates to are plain classes in `src/tui-host-core.ts`, which the suites
 import instead, so both are tested without a context — and re-exported from the
 seam, so a plugin still needs the one import.
@@ -733,7 +739,7 @@ regression still would.
   projection, queueing, steering, persistence, session storage, cross-session
   search, the panels, the plugin seam, i18n, the fleet, and the render cache.
 - **The boot-to-model turn is now automated, on demand.** `npm run test:live`
-  (`DSH_TUI_LIVE=1`) boots `dsh --profile tui` under `script(1)`, types a
+  (`MOQI_LIVE=1`) boots `dsh --profile tui` under `script(1)`, types a
   prompt, and asserts that the model's answer reaches a painted frame before
   quitting with the two-step ctrl+c. It needs credentials and costs a model
   call, so it is deliberately not part of `npm test`; a manual GitHub workflow

@@ -279,11 +279,11 @@ export function hostLabel(base: string): string {
 /** The `dsh` header line: mark and title on the left, host on the right. */
 function header(snapshot: Snapshot, width: number): string {
   const title = snapshot.title === '' ? 'new conversation' : snapshot.title
-  const left = `${bold('◆ dsh')}${muted(`  ${title}`)}`
+  const left = `${bold('◆ moqi')}${muted(`  ${title}`)}`
   const right = muted(snapshot.host)
   const gap = width - displayWidth(left) - displayWidth(right)
   if (gap < 2) {
-    return `${bold('◆ dsh')}${muted(`  ${truncate(title, Math.max(width - 8, 4))}`)}`
+    return `${bold('◆ moqi')}${muted(`  ${truncate(title, Math.max(width - 8, 4))}`)}`
   }
   return left + ' '.repeat(gap) + right
 }

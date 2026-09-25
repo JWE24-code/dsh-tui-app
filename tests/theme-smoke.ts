@@ -83,7 +83,7 @@ function noColorChecks(): void {
   )
 }
 
-if (process.env['DSH_TUI_THEME_SMOKE_NO_COLOR'] === '1') {
+if (process.env['MOQI_THEME_SMOKE_NO_COLOR'] === '1') {
   // The child says nothing on success; the parent scores it as one check.
   noColorChecks()
   process.exit(0)
@@ -184,15 +184,15 @@ check('a rejected switch leaves the active name untouched', activeTheme() === DE
 // --------------------------------------------------- light and dark variants
 
 // Both halves of a palette have to be reachable, or half the table is dead
-// weight. DSH_TUI_THEME picks the variant and is orthogonal to the choice of
+// weight. MOQI_THEME picks the variant and is orthogonal to the choice of
 // palette, so the same theme must emit different bytes on each background.
-const savedVariant = process.env['DSH_TUI_THEME']
+const savedVariant = process.env['MOQI_THEME']
 try {
   applyTheme('nord')
-  process.env['DSH_TUI_THEME'] = 'dark'
+  process.env['MOQI_THEME'] = 'dark'
   refreshTheme()
   const darkBytes = fingerprint()
-  process.env['DSH_TUI_THEME'] = 'light'
+  process.env['MOQI_THEME'] = 'light'
   refreshTheme()
   const lightBytes = fingerprint()
   check('the light variant differs from the dark one', darkBytes !== lightBytes)
@@ -201,8 +201,8 @@ try {
     darkBytes.includes('38;2;136;192;208') && lightBytes.includes('38;2;94;129;172'),
   )
 } finally {
-  if (savedVariant === undefined) delete process.env['DSH_TUI_THEME']
-  else process.env['DSH_TUI_THEME'] = savedVariant
+  if (savedVariant === undefined) delete process.env['MOQI_THEME']
+  else process.env['MOQI_THEME'] = savedVariant
   refreshTheme()
   applyTheme(DEFAULT_THEME)
 }
@@ -211,12 +211,12 @@ try {
 
 const childEnv = { ...process.env }
 delete childEnv['FORCE_COLOR']
-delete childEnv['DSH_TUI_THEME']
+delete childEnv['MOQI_THEME']
 
 execFileSync(process.execPath, ['--experimental-strip-types', fileURLToPath(import.meta.url)], {
   // FORCE_COLOR would make Node warn that it is overriding NO_COLOR; the app
   // reads the variables itself, but the warning would be noise in the run.
-  env: { ...childEnv, NO_COLOR: '1', DSH_TUI_THEME_SMOKE_NO_COLOR: '1' },
+  env: { ...childEnv, NO_COLOR: '1', MOQI_THEME_SMOKE_NO_COLOR: '1' },
   stdio: ['ignore', 'ignore', 'inherit'],
 })
 checks += 1

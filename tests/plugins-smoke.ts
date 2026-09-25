@@ -59,14 +59,14 @@ function requestOf(input: string): { name: string; spec: string } | undefined {
 }
 
 check('an empty add is refused', parsePackageRequest('').ok === false)
-check('a bare name parses', requestOf('dsh-tui')?.spec === 'dsh-tui')
+check('a bare name parses', requestOf('moqi')?.spec === 'moqi')
 check(
   'a scoped name parses',
   requestOf('@deepseek-ai/dsh-agent')?.name === '@deepseek-ai/dsh-agent',
 )
 check(
   'a name plus version parses with the version attached',
-  requestOf('dsh-tui@^1.2.3')?.spec === 'dsh-tui@^1.2.3',
+  requestOf('moqi@^1.2.3')?.spec === 'moqi@^1.2.3',
 )
 check('a leading dash is refused', parsePackageRequest('-g').ok === false)
 check('a shell injection is refused', parsePackageRequest('pkg; rm -rf /').ok === false)
