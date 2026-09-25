@@ -120,7 +120,7 @@ const EVERYTHING = probe(
     equal(
       'the recorder gap names both packages',
       voiceGapMessage(none.gap),
-      'no recorder — install alsa-utils (arecord) or sox',
+      'no recorder — run: npm run setup-voice, or install alsa-utils or sox',
     )
   }
 }
@@ -151,7 +151,7 @@ check('every recorder produces 16 kHz mono', RECORDERS.every((recorder) => {
     equal(
       'the binary gap names the install and the override',
       voiceGapMessage(noBinary.gap),
-      'no whisper binary — install whisper.cpp, or set DSH_TUI_WHISPER_BIN',
+      'no whisper binary — run: npm run setup-voice, or set DSH_TUI_WHISPER_BIN',
     )
   }
 }
@@ -301,7 +301,7 @@ check('every recorder produces 16 kHz mono', RECORDERS.every((recorder) => {
     equal(
       'with a file to download and a flag to point at it',
       voiceGapMessage(none.gap),
-      'no whisper model — put ggml-base.en.bin in ~/.cache/whisper/, or pass --voice-model',
+      'no whisper model — run: npm run setup-voice, or pass --voice-model',
     )
   }
 }

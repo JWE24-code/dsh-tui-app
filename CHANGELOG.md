@@ -7,6 +7,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+
+- **`npm run setup-voice`** — installs everything push-to-talk needs: a
+  recorder and whisper.cpp via the system package manager, and the `base.en`
+  weights into `~/.cache/whisper/`. Re-runnable, skips what is already there,
+  and `--print-only` shows the plan. The missing-dependency lines in the app
+  now name this command instead of leaving the reader to search.
 - **Interrupt as redirection** — `/interrupt` stops the streaming reply and
   pushes the queued prompts into the loop, where `esc` keeps its old meaning
   of silence (the queue freezes until sent again). The status line after a

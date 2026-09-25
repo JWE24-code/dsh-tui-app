@@ -173,6 +173,42 @@ OSC 52 escape — the one clipboard channel a terminal owns. It needs no
 dependency and no external process, so it works over SSH and inside tmux.
 Very long answers are truncated to what the terminal is willing to accept.
 
+## Dictating with your voice
+
+```sh
+npm run setup-voice
+```
+
+Then press `ctrl+v` in the app, speak, and press it again. The transcript is
+placed in the composer for you to read and edit — it is never sent for you,
+because a misheard prompt that sends itself is worse than no dictation at all.
+
+Everything happens on your machine: audio is recorded by `arecord` or `sox` to
+a temporary 16 kHz mono wav and transcribed by a local
+[whisper.cpp](https://github.com/ggerganov/whisper.cpp) binary. No audio leaves
+the machine and there is no API key. It follows that dictation only works where
+the microphone is — over SSH there isn't one.
+
+`setup-voice` is the whole story: it installs a recorder and whisper.cpp with
+your system package manager (asking for your password once), downloads the
+`base.en` weights to `~/.cache/whisper/`, and re-runs safely, skipping whatever
+is already in place. `--print-only` shows what it would do without doing it.
+The one platform it cannot finish is Debian and Ubuntu, which package the
+Python implementation rather than whisper.cpp; it says so rather than guessing.
+
+These are deliberately not npm dependencies — the executable is native and the
+weights are a 140MB download — which is why they are a setup step rather than
+part of `npm install`.
+
+To point at your own build or weights, `--voice-bin` and `--voice-model` win,
+then `DSH_TUI_WHISPER_BIN` and `DSH_TUI_WHISPER_MODEL`, then a search of PATH
+and of `~/.cache/whisper`, `~/.local/share/whisper` and the two
+`share/whisper.cpp` directories. `--voice-lang` or `DSH_TUI_WHISPER_LANG` sets
+the language; without one, whisper decides.
+
+When a piece is missing the footer names which one and the command that fixes
+it, rather than reporting that voice is unavailable.
+
 ## What persists
 
 Sent prompts, the thinking preference, and the chosen color palette are saved

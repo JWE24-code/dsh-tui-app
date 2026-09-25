@@ -268,15 +268,15 @@ export function resolveModel(
 export function voiceGapMessage(gap: VoiceGap): string {
   switch (gap.kind) {
     case 'recorder':
-      return 'no recorder — install alsa-utils (arecord) or sox'
+      return 'no recorder — run: npm run setup-voice, or install alsa-utils or sox'
     case 'binary':
-      return 'no whisper binary — install whisper.cpp, or set DSH_TUI_WHISPER_BIN'
+      return 'no whisper binary — run: npm run setup-voice, or set DSH_TUI_WHISPER_BIN'
     case 'binary-missing':
       return `no whisper binary at ${gap.path} — fix ${sourceLabel(gap.source, 'bin')}`
     case 'model-missing':
       return `no model at ${gap.path} — fix ${sourceLabel(gap.source, 'model')}`
     case 'model-unfound':
-      return 'no whisper model — put ggml-base.en.bin in ~/.cache/whisper/, or pass --voice-model'
+      return 'no whisper model — run: npm run setup-voice, or pass --voice-model'
   }
 }
 
