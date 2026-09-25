@@ -27,11 +27,27 @@ function check(label, condition) {
   console.log(`  ✓ ${label}`)
 }
 
+/**
+ * A child environment that cannot distort the check.
+ *
+ * `npm publish --dry-run` exports `npm_config_dry_run`, which a nested
+ * `npm pack` inherits and honours by writing no tarball at all — so the gate
+ * that protects publishing would fail when run as part of publishing.
+ */
+function cleanEnvironment(extra = {}) {
+  const environment = { ...process.env }
+  for (const key of Object.keys(environment)) {
+    if (key.toLowerCase() === 'npm_config_dry_run') delete environment[key]
+  }
+  return { ...environment, ...extra }
+}
+
 function run(command, args, options = {}) {
   return execFileSync(command, args, {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     ...options,
+    env: cleanEnvironment(options.env),
   })
 }
 
@@ -52,7 +68,7 @@ try {
   check('the bin ships', existsSync(join(installed, 'bin', 'dsh-tui-app.mjs')))
 
   // Run the launcher's install against a fresh Harness home.
-  const environment = { ...process.env, DSH_HOME: HOME }
+  const environment = { DSH_HOME: HOME }
   const installOutput = run('node', [join(installed, 'bin', 'dsh-tui-app.mjs'), 'install'], {
     env: environment,
     cwd: installed,
