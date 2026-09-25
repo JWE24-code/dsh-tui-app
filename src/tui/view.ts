@@ -35,6 +35,7 @@ import {
   colGold,
   colGreen,
   colMuted,
+  colRose,
   colText,
   colWarn,
   muted,
@@ -106,7 +107,15 @@ export interface Snapshot {
    * snapshot builder renders exactly as before.
    */
   fleet?: FleetView
+  /**
+   * Push-to-talk state, while the microphone is open or whisper is running.
+   * Optional so every existing snapshot builder renders exactly as before.
+   */
+  voice?: VoicePhase
 }
+
+/** What push-to-talk is doing, for the footer indicator. */
+export type VoicePhase = 'recording' | 'transcribing'
 
 /** Geometry derived from the terminal size and the current composer height. */
 export interface Layout {
@@ -734,7 +743,15 @@ function footer(snapshot: Snapshot, width: number): string {
   // a match jump leaves the view scrolled, which is exactly when the "no
   // matches" error and the `match i/n` counter matter most.
   const outranksScroll = snapshot.statusIsError || snapshot.searchActive === true
-  if (snapshot.scrollBack > 0 && !outranksScroll) {
+  if (snapshot.voice !== undefined) {
+    // An open microphone outranks all of it. Nothing else the footer says is
+    // worth a person not knowing the room is being recorded, so this line
+    // holds the slot for as long as the take lasts.
+    right =
+      snapshot.voice === 'recording'
+        ? style(`${snapshot.spinner} ● recording  ·  ctrl+v stop  ·  esc cancel`, { fg: colRose })
+        : style(`${snapshot.spinner} transcribing…`, { fg: colGold })
+  } else if (snapshot.scrollBack > 0 && !outranksScroll) {
     // Scrolled away from the newest output: say so, and say how to get back.
     right = style(
       `↑ ${String(snapshot.scrollBack)} line${snapshot.scrollBack === 1 ? '' : 's'}  ·  ctrl+g newest`,
@@ -875,8 +892,8 @@ export const HELP_TEXT = [
   '- `shift+↑` / `shift+↓` — one line · `ctrl+g` — back to newest',
   '- `ctrl+o` — expand or collapse tool calls · `ctrl+x` — compact the session',
   '- `ctrl+b` — show what the background agents are doing',
-  '- `ctrl+y` — copy the last reply to the clipboard',
-  '- `ctrl+f` — sessions across every device',
+  '- `ctrl+y` — copy the last reply · `ctrl+f` — sessions across every device',
+  '- `ctrl+v` — push to talk: record, then transcribe into the composer',
   '- `?` — open this help on an empty composer',
   '',
   '**Sessions**',
