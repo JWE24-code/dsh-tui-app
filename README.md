@@ -70,8 +70,8 @@ because two copies would be two different `Service` classes.
 From source — clone, build, and link the profile to the checkout:
 
 ```sh
-git clone https://github.com/JWE24-code/dsh-tui-app ~/Projects/dsh-tui-app
-cd ~/Projects/dsh-tui-app
+git clone https://github.com/JWE24-code/moqi ~/Projects/moqi
+cd ~/Projects/moqi
 npm install
 npm run build              # emits lib/
 npm run install-profile    # creates $DSH_HOME/profiles/tui and links this checkout
