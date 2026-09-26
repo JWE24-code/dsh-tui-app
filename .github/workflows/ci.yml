@@ -64,13 +64,22 @@ jobs:
           fetch-depth: 0
       - name: Check commit identities
         run: |
-          base="${{ github.event.pull_request.base.sha || github.event.before }}"
-          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
-            # A branch's first push reports an all-zero "before"; there is no
-            # parent to compare against, so the new tip is the whole range.
-            range="${{ github.sha }}~1..${{ github.sha }}"
+          # On a pull request, `github.sha` is the merge commit GitHub
+          # synthesises for the PR, and that commit carries the account's
+          # email rather than the author's — checking it would fail on
+          # something no commit here can change. The branch tip is what the
+          # author actually wrote.
+          if [ -n "${{ github.event.pull_request.head.sha }}" ]; then
+            range="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
           else
-            range="$base..${{ github.sha }}"
+            base="${{ github.event.before }}"
+            if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+              # A branch's first push reports an all-zero "before"; there is
+              # no parent to compare against, so the new tip is the range.
+              range="${{ github.sha }}~1..${{ github.sha }}"
+            else
+              range="$base..${{ github.sha }}"
+            fi
           fi
           echo "checking commit identities in $range"
           node scripts/check-commit-identity.mjs "$range"

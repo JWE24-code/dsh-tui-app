@@ -16,8 +16,16 @@
  * because the CI log of a public repository is itself public, and echoing the
  * leaked address into it would widen the exposure the check is closing.
  *
+ * Merge commits are reported but do not fail the check by default. A merge
+ * commit created by GitHub's own "Merge pull request" button carries the
+ * account's email, not the repository's identity, and the only fix for it is
+ * the account's own setting ("Keep my email addresses private"); failing the
+ * gate for something no commit in this repository can change would leave main
+ * permanently red, which is how gates stop being read. `--strict` fails on
+ * them too, for anyone auditing the whole history by hand.
+ *
  * Usage:
- *   node scripts/check-commit-identity.mjs [<rev-range>] [--all]
+ *   node scripts/check-commit-identity.mjs [<rev-range>] [--strict]
  *   RANGE=origin/main..HEAD node scripts/check-commit-identity.mjs
  *
  * With no range it checks every commit reachable from HEAD, which is the
@@ -44,20 +52,28 @@ function mask(email) {
 
 /** One `git log` record per commit, with a NUL between fields. */
 function commits(range) {
-  const args = ['log', '--format=%H%x00%an%x00%ae%x00%cn%x00%ce', '--no-color']
+  const args = ['log', '--format=%H%x00%p%x00%an%x00%ae%x00%cn%x00%ce', '--no-color']
   if (range !== undefined && range !== '') args.push(range)
   const out = execFileSync('git', args, { encoding: 'utf8' })
   return out
     .split('\n')
     .filter((line) => line.trim() !== '')
     .map((line) => {
-      const [sha, authorName, authorEmail, committerName, committerEmail] = line.split('\u0000')
-      return { sha, authorName, authorEmail, committerName, committerEmail }
+      const [sha, parents, authorName, authorEmail, committerName, committerEmail] = line.split('\u0000')
+      return {
+        sha,
+        merge: (parents ?? '').trim().includes(' '),
+        authorName,
+        authorEmail,
+        committerName,
+        committerEmail,
+      }
     })
 }
 
 const argv = process.argv.slice(2)
-const range = argv.find((arg) => arg !== '--all')
+const strict = argv.includes('--strict')
+const range = argv.find((arg) => !arg.startsWith('--'))
 
 const offenders = []
 for (const commit of commits(range)) {
@@ -67,11 +83,29 @@ for (const commit of commits(range)) {
   ]) {
     if (email === undefined || email === '') continue
     if (ALLOWED.some((pattern) => pattern.test(email))) continue
-    offenders.push({ sha: commit.sha, role, name, email })
+    offenders.push({ sha: commit.sha, role, name, email, merge: commit.merge })
   }
 }
 
-if (offenders.length === 0) {
+const failing = strict ? offenders : offenders.filter((offender) => !offender.merge)
+const warned = strict ? [] : offenders.filter((offender) => offender.merge)
+
+if (warned.length > 0) {
+  console.error('Merge commits with a non-public identity (not failing the check):')
+  for (const offender of warned) {
+    console.error(
+      `  ${offender.sha.slice(0, 12)}  ${offender.role}: ${offender.name} <${mask(offender.email)}>`,
+    )
+  }
+  console.error('')
+  console.error('A merge commit created by GitHub carries the account email, not the')
+  console.error('repository identity. Enable "Keep my email addresses private" in the')
+  console.error('GitHub account settings to make those use the noreply address instead;')
+  console.error('a merge commit made locally should be authored with the pinned identity.')
+  console.error('')
+}
+
+if (failing.length === 0) {
   const scope = range === undefined || range === '' ? 'all reachable commits' : range
   console.log(`ok - commit identities are public across ${scope}`)
   process.exit(0)

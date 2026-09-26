@@ -210,7 +210,14 @@ future source for bar colour instead of local thresholds.
   clone (`git config user.email …`) and check before pushing with
   `npm run check-identity <base>..HEAD`. CI runs the same check over the
   commits a push or PR adds, and its failure message masks the address,
-  because the CI log of a public repository is itself public. The npm tarball
+  because the CI log of a public repository is itself public.
+  **Merge commits are reported, not fatal**, because one created by GitHub's
+  own "Merge pull request" button carries the *account's* email, which no
+  commit in this repository can change — that is the GitHub account setting
+  "Keep my email addresses private" (turn it on; it also stops future merge
+  commits on `main` from carrying the personal address that is already there
+  as a committer on ten older commits). `--strict` fails on them too, for a
+  full audit. The npm tarball
   is unaffected by this — metadata is not shipped — so an audit is about the
   repository's history, not the release artifact.
 - **A new Harness peer dependency must be marked optional in *both*
