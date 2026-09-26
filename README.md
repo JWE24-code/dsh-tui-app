@@ -517,17 +517,20 @@ rendered as a panel that owns the keyboard until it settles:
  enter opens the browser  ·  esc cancels the sign-in
 ```
 
-`enter` on a bare notice like this one opens its page with the platform's own
-launcher (`xdg-open`/`open`/`start`) rather than leaving you to select and
-copy a URL by hand; the code and page stay on screen once the flow moves on to
-its own question, the way a device-code flow needs them to. A flow that needs
-an answer — that pasted code, an account to pick from a list — prompts for it
-the same way; `enter` submits, `esc` declines just that question if the flow
-can recover, or withdraws the whole attempt if nothing is being asked yet.
-Success or cancellation lands as an ordinary status line, and the stored
-credential outlives the app: signing in once is enough for every session
-afterward, until you sign out through whatever surface manages that
-credential store.
+The page lands on the clipboard the moment the notice does, not only once
+`enter` asks to open it — the terminal you are actually in may not be the
+machine whose browser can reach it (an SSH session, a remote box), and pasting
+it there is the fallback `enter` cannot offer. `enter` on a bare notice like
+this one *also* opens its page with the platform's own launcher
+(`xdg-open`/`open`/`start`), for whichever of the two is faster; the code and
+page stay on screen once the flow moves on to its own question, the way a
+device-code flow needs them to. A flow that needs an answer — that pasted
+code, an account to pick from a list — prompts for it the same way; `enter`
+submits, `esc` declines just that question if the flow can recover, or
+withdraws the whole attempt if nothing is being asked yet. Success or
+cancellation lands as an ordinary status line, and the stored credential
+outlives the app: signing in once is enough for every session afterward,
+until you sign out through whatever surface manages that credential store.
 
 Signing in authenticates the route; it does not by itself add one to `/model`.
 That is a profile-level `dsh-llm-pi-ai` config, the same as any other route

@@ -3874,6 +3874,14 @@ class TuiApp {
       notify: (notice) => {
         if (this.panel !== login) return
         login.notice = notice
+        // The page is on the clipboard the moment it is known, not only once
+        // `enter` asks to open it — the browser to actually use it in may not
+        // be reachable from wherever this terminal is (an SSH session, say),
+        // and pasting it there is the fallback `enter` cannot offer.
+        if (notice.url !== undefined) {
+          const result = this.writeClipboard(notice.url)
+          this.setStatus(result.ok ? `page copied — ${notice.url}` : notice.url)
+        }
         this.paint()
       },
       prompt: (prompt) =>

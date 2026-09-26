@@ -18,13 +18,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   login for — from the moment it mounts. A flow's notices and questions are
   rendered as a panel that owns the keyboard until the attempt settles: a
   message plus a page and code to act on, or a prompt (text, a pasted secret,
-  or a choice of accounts) that `enter` answers and `esc` declines. `enter` on
-  a bare notice with a page opens it with the platform's own launcher
-  (`xdg-open`/`open`/`start`) instead of leaving it to be read and typed by
-  hand, and a device-code flow's page and code stay on screen once its own
-  prompt takes over, rather than being replaced by it. Signing in
-  authenticates the route; adding it to `/model` is still an ordinary
-  `dsh-llm-pi-ai` config, documented in the README.
+  or a choice of accounts) that `enter` answers and `esc` declines. The page
+  lands on the clipboard the moment the notice does — not only once `enter`
+  asks to open it, since the terminal is not always on the machine whose
+  browser can reach it — and `enter` on a bare notice also opens it with the
+  platform's own launcher (`xdg-open`/`open`/`start`). A device-code flow's
+  page and code stay on screen once its own prompt takes over, rather than
+  being replaced by it. Signing in authenticates the route; adding it to
+  `/model` is still an ordinary `dsh-llm-pi-ai` config, documented in the
+  README.
 - **`/usage`** — a running per-provider token ledger: prompt, completion, and
   turns, tallied once per finished turn from what the provider itself
   reported, kept across a restart the same way the composer history is, and
