@@ -32,9 +32,20 @@ import {
   type PersistedSession,
   type PersistedState,
 } from '../src/persist.ts'
+import type { TokenBuckets } from '../src/usage.ts'
 
 /** The current on-disk version, as the writer stamps it. */
-const VERSION = 4
+const VERSION = 5
+
+/** A bucket set, spelled positionally so a fixture row stays readable. */
+function buckets(uncached: number, output: number, cacheRead = 0, cacheWrite = 0): TokenBuckets {
+  return {
+    uncachedInputTokens: uncached,
+    outputTokens: output,
+    cacheReadTokens: cacheRead,
+    cacheWriteTokens: cacheWrite,
+  }
+}
 
 /** A state with only the fields a case cares about spelled out. */
 function state(partial: Partial<PersistedState> = {}): PersistedState {
@@ -141,11 +152,12 @@ try {
   // -------------------------------------------------- round trip: usage
 
   await saveState(
-    state({ usage: { anthropic: { promptTokens: 1200, completionTokens: 300, turns: 2 } } }),
+    state({ usage: { anthropic: { ...buckets(1200, 300, 40, 10), turns: 2 } } }),
     env,
   )
   const withUsage = await loadState(env)
-  check('save/load round-trips a usage row', withUsage.usage['anthropic']?.promptTokens === 1200)
+  check('save/load round-trips a usage row', withUsage.usage['anthropic']?.uncachedInputTokens === 1200)
+  check('save/load round-trips every bucket, not just the prompt side', withUsage.usage['anthropic']?.cacheReadTokens === 40)
   check('save/load round-trips the turn count', withUsage.usage['anthropic']?.turns === 2)
 
   const { writeFile: writeUsageFixture } = await import('node:fs/promises')
@@ -155,27 +167,30 @@ try {
       ...state(),
       version: VERSION,
       usage: {
-        anthropic: { promptTokens: 10, completionTokens: 5, turns: 1 },
-        broken: { promptTokens: 'nope', completionTokens: 5, turns: 1 },
+        anthropic: { ...buckets(10, 5), turns: 1 },
+        broken: { ...buckets(10, 5), cacheReadTokens: 'nope', turns: 1 },
+        partial: { uncachedInputTokens: 10, outputTokens: 5, turns: 1 },
         alsoBroken: 'not even an object',
       },
     }),
     'utf8',
   )
   const mixedUsage = await loadState(env)
-  check('a well-formed usage row survives', mixedUsage.usage['anthropic']?.promptTokens === 10)
+  check('a well-formed usage row survives', mixedUsage.usage['anthropic']?.uncachedInputTokens === 10)
   check('a usage row with a non-numeric field is dropped', mixedUsage.usage['broken'] === undefined)
+  check('a usage row missing a bucket entirely is dropped rather than read as zero', mixedUsage.usage['partial'] === undefined)
   check('a usage row that is not an object is dropped', mixedUsage.usage['alsoBroken'] === undefined)
 
   // ---------------------------------------------- round trip: usageEntries
 
   await saveState(
-    state({ usageEntries: [{ provider: 'anthropic', promptTokens: 100, completionTokens: 20, at: 1_700_000_000_000 }] }),
+    state({ usageEntries: [{ provider: 'anthropic', ...buckets(100, 20, 5), at: 1_700_000_000_000 }] }),
     env,
   )
   const withEntries = await loadState(env)
   check('save/load round-trips a usage entry', withEntries.usageEntries[0]?.provider === 'anthropic')
   check('save/load round-trips an entry\'s timestamp', withEntries.usageEntries[0]?.at === 1_700_000_000_000)
+  check('save/load round-trips an entry\'s cache buckets', withEntries.usageEntries[0]?.cacheReadTokens === 5)
   check('the fallback carries no usage entries', (await loadState({ DSH_HOME: join(sandbox, 'nothing') })).usageEntries.length === 0)
 
   await writeUsageFixture(
@@ -184,9 +199,10 @@ try {
       ...state(),
       version: VERSION,
       usageEntries: [
-        { provider: 'anthropic', promptTokens: 10, completionTokens: 5, at: 1 },
-        { provider: 'broken', promptTokens: 'nope', completionTokens: 5, at: 1 },
-        { promptTokens: 10, completionTokens: 5, at: 1 },
+        { provider: 'anthropic', ...buckets(10, 5), at: 1 },
+        { provider: 'broken', ...buckets(10, 5), outputTokens: 'nope', at: 1 },
+        { ...buckets(10, 5), at: 1 },
+        { provider: 'noBuckets', at: 1 },
         'not even an object',
       ],
     }),

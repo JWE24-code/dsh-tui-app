@@ -38,6 +38,7 @@ import {
   type AuthorizationInteraction,
   type AuthorizationPrompt,
 } from '@deepseek-ai/dsh-authorization'
+import { credentialKey, credentialRef } from '@deepseek-ai/dsh-credentials'
 
 import { Screen } from './tui/screen.ts'
 import type { Key } from './tui/keys.ts'
@@ -134,14 +135,17 @@ import { VERSION } from './version.ts'
 import {
   SESSION_MS,
   WEEK_MS,
-  deepSeekPeakStatus,
-  looksLikeDeepSeek,
+  bucketDelta,
+  isEmptyBuckets,
+  noBuckets,
   recordUsage,
   recordUsageEntry,
   windowUsage,
+  type TokenBuckets,
   type UsageEntry,
   type UsageLedger,
 } from './usage.ts'
+import { collectPlans, hasProbe, type CredentialLookup, type Route } from './credits.ts'
 import { UsageView } from './tui/usage-view.ts'
 import {
   FleetView,
@@ -344,8 +348,18 @@ interface SessionTab {
   cacheWriteTokens: number
   /** Output tokens at the moment the current turn began, for a turn's own rate. */
   turnStartTokens: number
-  /** Prompt tokens at the moment the current turn began, for its own usage tally. */
-  turnStartPromptTokens: number
+  /**
+   * This session's cumulative billed usage as of the last turn folded into the
+   * ledger.
+   *
+   * The Harness's `tokenUsage` projection only grows for a given session, so the
+   * movement between this and the next reading is exactly what the turns in
+   * between were billed. That is what makes the ledger's subtraction sound,
+   * where subtracting one *context size* from another — what this app did
+   * before — was measuring a quantity that was never cumulative and could move
+   * either way for reasons that had nothing to do with spend.
+   */
+  billedAtLastFold: TokenBuckets
   /** Output tokens per second for the last settled turn. */
   tps: number
   scrollBack: number
@@ -410,7 +424,7 @@ function newTab(id: string): SessionTab {
     cacheReadTokens: 0,
     cacheWriteTokens: 0,
     turnStartTokens: 0,
-    turnStartPromptTokens: 0,
+    billedAtLastFold: noBuckets(),
     tps: 0,
     scrollBack: 0,
     queued: [],
@@ -1718,9 +1732,80 @@ class TuiApp {
   }
 
   /**
+   * One session's cumulative billed usage, as the Harness's own token meter
+   * accounts for it — or undefined when it cannot be had.
+   *
+   * The `tokenUsage` projection is the only thing in reach that knows what a
+   * provider actually billed: it folds the durable log, counts a retried attempt
+   * as the second billed attempt it is, and reports the four buckets separately
+   * because every provider prices them separately. Nothing else available to this
+   * app can answer that — the stream's own `usage` frames carry the *latest*
+   * request's absolute numbers, which is context pressure, not spend.
+   *
+   * Every failure mode returns undefined rather than a zero: the projection may
+   * not be mounted in a given composition, the session may not be adopted yet,
+   * and a shape this app does not recognize must not be read as "nothing was
+   * billed". A ledger that silently stops recording is recoverable; one that
+   * records confident zeros is not.
+   */
+  private readBilledUsage(tab: SessionTab): TokenBuckets | undefined {
+    const session = tab.agent?.session
+    if (session === undefined) return undefined
+    const projections = this.ctx.get('sessionProjections') as ProjectionReader | undefined
+    if (projections === undefined) return undefined
+    try {
+      const value = projections.snapshot(session, ['tokenUsage']).values['tokenUsage']
+      if (typeof value !== 'object' || value === null) return undefined
+      const record = value as Record<string, unknown>
+      const read = (key: string): number | undefined => {
+        const raw = record[key]
+        return typeof raw === 'number' && Number.isFinite(raw) ? raw : undefined
+      }
+      const uncachedInputTokens = read('uncachedInputTokens')
+      const outputTokens = read('outputTokens')
+      const cacheReadTokens = read('cacheReadTokens')
+      const cacheWriteTokens = read('cacheWriteTokens')
+      if (
+        uncachedInputTokens === undefined ||
+        outputTokens === undefined ||
+        cacheReadTokens === undefined ||
+        cacheWriteTokens === undefined
+      ) {
+        return undefined
+      }
+      return { uncachedInputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }
+    } catch {
+      // A projection read is a convenience; a composition that cannot serve it
+      // must not be able to take a settled turn down with it.
+      return undefined
+    }
+  }
+
+  /**
+   * Fold whatever this session was billed since the last fold into the ledger,
+   * attributed to the provider that answered.
+   *
+   * The baseline advances only when a reading succeeds, so a turn whose usage
+   * could not be read is not lost — its spend is still in the session's
+   * cumulative total and lands in the ledger the next time a reading works,
+   * attributed to whichever provider answered then. That is a deliberate trade:
+   * attribution can smear across a mid-conversation provider switch, which is
+   * rare, in exchange for never dropping spend, which would otherwise be
+   * permanent.
+   */
+  private foldBilledUsage(tab: SessionTab, provider: string): void {
+    const billed = this.readBilledUsage(tab)
+    if (billed === undefined) return
+    const delta = bucketDelta(tab.billedAtLastFold, billed)
+    tab.billedAtLastFold = billed
+    if (isEmptyBuckets(delta)) return
+    this.usageLedger = recordUsage(this.usageLedger, provider, delta)
+    this.usageEntries = recordUsageEntry(this.usageEntries, provider, delta, Date.now())
+  }
+
+  /**
    * `/usage`: compute the session (5h) and week (7d) rolling windows from the
-   * entry log, and DeepSeek's peak-hour status when a DeepSeek-like provider
-   * has been used, then show the dashboard.
+   * entry log, then show the dashboard and ask each provider for its plan.
    *
    * A snapshot, the same as `/jobs` and `/mcp` are: the pane draws exactly
    * what was true the moment it opened rather than re-querying the clock on
@@ -1731,14 +1816,86 @@ class TuiApp {
     const now = Date.now()
     const session = windowUsage(this.usageEntries, SESSION_MS, now)
     const week = windowUsage(this.usageEntries, WEEK_MS, now)
-    const usesDeepSeek = Object.keys(this.usageLedger).some((provider) => looksLikeDeepSeek(provider))
-    const deepSeekPeak = usesDeepSeek ? deepSeekPeakStatus(now) : undefined
-    this.usageView.setData(session, week, this.usageLedger, deepSeekPeak, now)
+    this.usageView.setData(session, week, this.usageLedger, now)
     this.usageView.show()
     this.picker.hide()
     this.palette.close()
     this.setStatus('')
+    // The local half is drawn immediately; the provider half arrives over the
+    // network, so the pane opens with what it already knows rather than holding
+    // a blank screen for however long the slowest provider takes.
+    this.usageView.setPlansPending()
     this.paint()
+    void this.refreshPlans()
+  }
+
+  /**
+   * Which routes `/usage` should ask about: every provider configured on the LLM
+   * adapter that this app has a plan probe for, plus every provider the ledger
+   * has already attributed a turn to.
+   *
+   * The union is what makes the pane complete. Configuration alone misses a route
+   * reached through a stored sign-in rather than a configured key, and the ledger
+   * alone misses a configured provider that simply has not been used yet — which
+   * is exactly the one a user checks before starting a long job.
+   */
+  private planRoutes(): Route[] {
+    const names = new Map<string, string>()
+    try {
+      for (const provider of this.ctx.get('llm')?.listProviders() ?? []) {
+        if (provider.id !== '') names.set(provider.id, provider.name === '' ? provider.id : provider.name)
+      }
+    } catch {
+      // A provider list this app cannot read is not a reason to show no plans:
+      // the ledger still names every provider that has answered a turn.
+    }
+    for (const provider of Object.keys(this.usageLedger)) {
+      if (!names.has(provider)) names.set(provider, provider)
+    }
+    return [...names.entries()]
+      .filter(([provider]) => hasProbe(provider))
+      .map(([provider, displayName]) => ({ provider, displayName }))
+  }
+
+  /**
+   * Ask every probeable route for its plan and repaint when the answers land.
+   *
+   * Nothing here can reject: `collectPlans` turns every per-provider failure into
+   * that provider's own explanation line, so a provider being down costs one line
+   * rather than the whole pane. The repaint is guarded on the pane still being
+   * open, so answers arriving after the user pressed esc are simply kept for the
+   * next time it opens rather than painting over whatever replaced it.
+   */
+  private async refreshPlans(): Promise<void> {
+    const credentials = this.ctx.get('credentials')
+    if (credentials === undefined) {
+      this.usageView.setPlans([], Date.now())
+      if (this.usageView.open) this.paint()
+      return
+    }
+    const lookup: CredentialLookup = {
+      resolveKey: async (name) => {
+        try {
+          return (await credentials.resolve(credentialRef(name)))?.value
+        } catch {
+          return undefined
+        }
+      },
+      readGrantToken: async (owner, id) => {
+        try {
+          const record = await credentials.readRecord(credentialKey(owner, id))
+          const payload = (record as { payload?: unknown } | undefined)?.payload
+          if (typeof payload !== 'object' || payload === null) return undefined
+          const access = (payload as Record<string, unknown>)['access']
+          return typeof access === 'string' && access !== '' ? access : undefined
+        } catch {
+          return undefined
+        }
+      },
+    }
+    const plans = await collectPlans(this.planRoutes(), lookup)
+    this.usageView.setPlans(plans, Date.now())
+    if (this.usageView.open) this.paint()
   }
 
   /**
@@ -3193,7 +3350,6 @@ class TuiApp {
     tab.streaming = true
     tab.streamStartedAt = Date.now()
     tab.turnStartTokens = tab.completionTokens
-    tab.turnStartPromptTokens = tab.promptTokens
     tab.drainQueue = false
     tab.streamingSegments = []
     tab.streamingReasoning = ''
@@ -3233,9 +3389,7 @@ class TuiApp {
       // request just settled, which stays correct even though `current`
       // already points at a switch queued for the next turn.
       const provider = tab.selection.assembled?.provider ?? tab.selection.current?.provider ?? ''
-      const turnPrompt = tab.promptTokens - tab.turnStartPromptTokens
-      this.usageLedger = recordUsage(this.usageLedger, provider, turnPrompt, turnOutput)
-      this.usageEntries = recordUsageEntry(this.usageEntries, provider, turnPrompt, turnOutput, Date.now())
+      this.foldBilledUsage(tab, provider)
       this.persistSoon()
       tab.streaming = false
       tab.streamStartedAt = 0
@@ -4609,6 +4763,21 @@ class TuiApp {
 interface SessionTitleLike {
   rename?: (session: Session, title: string) => unknown
   refresh?: (session: Session, signal?: AbortSignal) => Promise<unknown> | unknown
+}
+
+/**
+ * The subset of `ctx.sessionProjections` the usage ledger reads: one consistent
+ * cut over the named units for one session.
+ *
+ * Structural rather than imported, so this app does not take a dependency on the
+ * projection package to read one number out of it, and a composition that does
+ * not mount projections at all is an ordinary `undefined` from `ctx.get` rather
+ * than a load-time failure. The value is deliberately `unknown`: its shape is
+ * the token meter's to define, and {@link TuiApp.readBilledUsage} validates every
+ * field it uses.
+ */
+interface ProjectionReader {
+  snapshot: (session: Session, keys?: readonly string[]) => { values: Record<string, unknown> }
 }
 
 /** The subset of `ctx.sessionQuery` the picker uses, probed defensively. */

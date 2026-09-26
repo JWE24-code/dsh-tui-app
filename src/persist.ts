@@ -13,7 +13,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
-import type { UsageEntry, UsageLedger } from './usage.ts'
+import type { ProviderUsage, TokenBuckets, UsageEntry, UsageLedger } from './usage.ts'
 
 /**
  * One session that was open when the app last exited.
@@ -65,8 +65,16 @@ export interface PersistedState {
   usageEntries: UsageEntry[]
 }
 
-/** Version of the on-disk shape, so a future change can migrate or discard. */
-const STATE_VERSION = 4
+/**
+ * Version of the on-disk shape, so a future change can migrate or discard.
+ *
+ * Bumped to 5 when the usage ledger moved from a two-number `promptTokens`/
+ * `completionTokens` pair to the provider's own four billed buckets. The old
+ * numbers are not convertible: they were differences between context sizes, not
+ * billed totals, so they are discarded rather than carried forward under names
+ * that would imply they had ever been right.
+ */
+const STATE_VERSION = 5
 
 /**
  * How many sessions a single restore will bring back.
@@ -85,21 +93,43 @@ function fallbackState(): PersistedState {
   return { inputHistory: [], thinking: false, peers: [], sessions: [], activeSession: 0, usage: {}, usageEntries: [] }
 }
 
-/** Coerce one on-disk usage row, or reject it outright. */
-function readUsageRow(value: unknown): { promptTokens: number; completionTokens: number; turns: number } | undefined {
-  if (typeof value !== 'object' || value === null) return undefined
-  const record = value as Record<string, unknown>
-  const promptTokens = record['promptTokens']
-  const completionTokens = record['completionTokens']
-  const turns = record['turns']
+/** A finite number at `key`, or undefined when it is missing or another type. */
+function finite(record: Record<string, unknown>, key: string): number | undefined {
+  const value = record[key]
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+/**
+ * Coerce the four billed buckets, or reject the row outright.
+ *
+ * All four must be present and finite. A row missing one is a row whose total
+ * would silently understate the spend it claims to record, which is worse than
+ * no row at all.
+ */
+function readBuckets(record: Record<string, unknown>): TokenBuckets | undefined {
+  const uncachedInputTokens = finite(record, 'uncachedInputTokens')
+  const outputTokens = finite(record, 'outputTokens')
+  const cacheReadTokens = finite(record, 'cacheReadTokens')
+  const cacheWriteTokens = finite(record, 'cacheWriteTokens')
   if (
-    typeof promptTokens !== 'number' || !Number.isFinite(promptTokens) ||
-    typeof completionTokens !== 'number' || !Number.isFinite(completionTokens) ||
-    typeof turns !== 'number' || !Number.isFinite(turns)
+    uncachedInputTokens === undefined ||
+    outputTokens === undefined ||
+    cacheReadTokens === undefined ||
+    cacheWriteTokens === undefined
   ) {
     return undefined
   }
-  return { promptTokens, completionTokens, turns }
+  return { uncachedInputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }
+}
+
+/** Coerce one on-disk usage row, or reject it outright. */
+function readUsageRow(value: unknown): ProviderUsage | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const record = value as Record<string, unknown>
+  const buckets = readBuckets(record)
+  const turns = finite(record, 'turns')
+  if (buckets === undefined || turns === undefined) return undefined
+  return { ...buckets, turns }
 }
 
 /** Coerce the on-disk usage ledger, dropping any row that does not parse. */
@@ -118,18 +148,12 @@ function readUsageEntry(value: unknown): UsageEntry | undefined {
   if (typeof value !== 'object' || value === null) return undefined
   const record = value as Record<string, unknown>
   const provider = record['provider']
-  const promptTokens = record['promptTokens']
-  const completionTokens = record['completionTokens']
-  const at = record['at']
-  if (
-    typeof provider !== 'string' || provider === '' ||
-    typeof promptTokens !== 'number' || !Number.isFinite(promptTokens) ||
-    typeof completionTokens !== 'number' || !Number.isFinite(completionTokens) ||
-    typeof at !== 'number' || !Number.isFinite(at)
-  ) {
+  const buckets = readBuckets(record)
+  const at = finite(record, 'at')
+  if (typeof provider !== 'string' || provider === '' || buckets === undefined || at === undefined) {
     return undefined
   }
-  return { provider, promptTokens, completionTokens, at }
+  return { provider, ...buckets, at }
 }
 
 /** Coerce the on-disk rolling-window log, dropping any entry that does not parse. */

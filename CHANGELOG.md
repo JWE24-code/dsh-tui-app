@@ -33,22 +33,53 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   being replaced by it. Signing in authenticates the route; adding it to
   `/model` is still an ordinary `dsh-llm-pi-ai` config, documented in the
   README.
-- **`/usage`** — a full-screen colored dashboard, not a markdown overlay, so
-  it can carry real per-provider color: three rolling-window sections
-  (session 5h, week 7d — the shape Anthropic's Claude Pro/Max and z.ai's GLM
-  coding plan both rate-limit on — and a lifetime total that never forgets),
-  each a bar chart of every provider's share of the tokens spent *in that
-  window*, scaled to that window's own total rather than to its busiest
+- **`/usage` reports what each provider's plan actually has left.** A local
+  tally of tokens cannot answer that question: only the provider knows what a
+  prepaid balance is down to, how much of a 5-hour window is gone, or when
+  either resets. The pane now asks, using the credentials already in the
+  Harness credential store, and shows a block per route — DeepSeek's prepaid
+  balance split into granted and topped up, z.ai's plan tier with its 5-hour
+  and weekly credit windows and renewal price, and a Claude Pro/Max plan's
+  5-hour and 7-day utilization. Every probe runs concurrently and every one
+  resolves: a provider that is unset, down, or slow costs its own block one
+  line of explanation and leaves the rest of the pane intact, because the
+  comparison across providers is the whole point of it. The pane paints
+  immediately with what it already knows and fills the plan half in as answers
+  land. Quota bars are colored by how close the window is to its limit, not by
+  provider identity — a quota is a status reading, not a category. No secret is
+  read from a file, printed, or put in a URL: a token goes into an
+  `Authorization` header and nowhere else. The parsers refuse rather than
+  improvise, which is load-bearing: z.ai reports a window's *limit* in a field
+  called `usage` and its *consumption* in `currentValue`, so the obvious
+  reading of that payload would show a plan as fully spent while it was 1%
+  used. The z.ai parser matches those names exactly and cross-checks them
+  against the row's own `remaining`, so a future rename surfaces as a refusal
+  rather than silently inverting the bars.
+- **DeepSeek's peak window now states its throughput cost, not only its
+  price.** The two bite differently. Pricing is predictable and countdown-able
+  — off-peak is half price, so a long job can wait for it. Throughput is the
+  one that surprises people: DeepSeek enforces no per-account request limit and
+  does not reject requests for load, it holds the connection open instead, so
+  at peak what you experience is not an error but a turn that takes far longer
+  than usual. Saying so is the difference between "DeepSeek is broken" and "it
+  is 09:00 UTC on a Tuesday".
+- **Token spend is reported in the provider's own four billed buckets**, so a
+  row splits prompt from output — priced differently everywhere, and one total
+  hides which way a route is expensive — and reports the share of its prompt
+  served from cache when there is one to report. That last is the one figure
+  here you can act on: a rate that collapses is usually a cache that stopped
+  being hit.
+- **`/usage`** is a full-screen colored dashboard rather than a markdown
+  overlay, so it can carry real per-provider color: three rolling-window
+  sections (session 5h, week 7d — the shape Anthropic's Claude Pro/Max and
+  z.ai's GLM coding plan both rate-limit on — and a lifetime total that never
+  forgets), each a bar chart of every provider's share of the tokens spent *in
+  that window*, scaled to that window's own total rather than to its busiest
   provider, so two close providers read as two bars close in length rather
   than one exaggerated against the other. A provider keeps the same color in
-  every section it appears in. Once a DeepSeek-routed provider has been used,
-  a status line reports DeepSeek's own published peak/off-peak pricing
-  schedule (standard rates 01:00–04:00 and 06:00–10:00 UTC on weekdays, half
-  price every other hour) and the time to the next change. Session and week
-  are computed from a timestamped log kept alongside the lifetime ledger,
-  pruned past 7 days on every write; a turn that reported no usage
-  (interrupted before its first frame) adds nothing to either, rather than a
-  phantom zero-token row. `/usage reset` clears both.
+  every section it appears in. Session and week are computed from a timestamped
+  log kept alongside the lifetime ledger, pruned past 7 days on every write.
+  `/usage reset` clears both.
 - **`x` closes a session from the `/sessions` list** without leaving it, so
   tidying up several open sessions is not a switch-then-`/close`-then-reopen
   loop. The last session still cannot be closed this way, the same guard
@@ -63,6 +94,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`/usage`'s token figures were measuring the wrong quantity entirely.** The
+  ledger subtracted one *context size* from another and recorded the difference
+  as spend. Context pressure — the size of the prompt the next request would
+  send, which is what the footer's `↑`/`↓` pair shows — is not cumulative, so
+  that subtraction could not be right. A turn whose context had shrunk since
+  the previous one produced a negative difference, clamped to zero, and
+  recorded a full prompt's worth of real spend as nothing at all; observed
+  live, a second turn billed ~8,300 prompt tokens while the old arithmetic
+  computed `7,000 - 8,302` and logged zero. A multi-request turn fared no
+  better: only the last request's output was ever counted. The ledger now reads
+  the Harness's own `tokenUsage` session projection — four separately-priced
+  billed buckets, already retry-aware, so a retried attempt counts as the
+  second billed attempt it is — and differences two readings of a quantity that
+  really is cumulative. Every failure mode (a projection not mounted, a session
+  not yet adopted, a shape this app does not recognize) records nothing rather
+  than a confident zero, and the unrecorded spend is not lost: it lands the
+  next time a reading succeeds. The persisted state version is bumped, which
+  discards the old figures rather than carrying them forward under names that
+  would imply they had ever been right.
+- **A Claude plan's limits read as `anthropic`.** An OAuth-only route is
+  configured as an empty entry, so the adapter has nothing to label it with and
+  hands back the bare route id. `/usage` now supplies a readable name for the
+  routes it knows — a label the adapter does supply still wins.
 - **Attaching to a remote fleet session could look like the whole app
   restarting.** Handing the terminal to `ssh -t` running a second, nested copy
   of this same app surfaced two real bugs on the way back: a stray `SIGHUP` —

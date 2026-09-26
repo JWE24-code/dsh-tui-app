@@ -7,15 +7,22 @@ import {
   CHART_WIDTH,
   SESSION_MS,
   WEEK_MS,
+  bucketDelta,
+  cacheHitRate,
   deepSeekPeakStatus,
   filledWidth,
+  grandTotal,
   grouped,
+  isEmptyBuckets,
   looksLikeDeepSeek,
+  noBuckets,
+  promptTotal,
   recordUsage,
   recordUsageEntry,
   sortedRows,
   totalUsage,
   windowUsage,
+  type TokenBuckets,
   type UsageEntry,
   type UsageLedger,
 } from '../src/usage.ts'
@@ -31,40 +38,73 @@ function check(name: string, condition: boolean): void {
   }
 }
 
+/** A bucket set, spelled positionally so a test row stays readable. */
+function buckets(uncached: number, output: number, cacheRead = 0, cacheWrite = 0): TokenBuckets {
+  return {
+    uncachedInputTokens: uncached,
+    outputTokens: output,
+    cacheReadTokens: cacheRead,
+    cacheWriteTokens: cacheWrite,
+  }
+}
+
+// ------------------------------------------------------------ bucket algebra
+
+check('an empty bucket set totals to nothing', isEmptyBuckets(noBuckets()))
+check('promptTotal counts every prompt-side bucket', promptTotal(buckets(100, 7, 20, 5)) === 125)
+check('grandTotal adds output to the prompt side', grandTotal(buckets(100, 7, 20, 5)) === 132)
+check('cache hit rate is cache reads over all prompt tokens', cacheHitRate(buckets(75, 0, 25)) === 0.25)
+check('cache hit rate of a route with no prompt tokens is undefined', cacheHitRate(noBuckets()) === undefined)
+
+// The sound subtraction the ledger now rests on: two readings of one session's
+// cumulative billed usage, whose difference is exactly what was billed between.
+const growth = bucketDelta(buckets(100, 10, 5, 1), buckets(180, 25, 9, 1))
+check('a delta between two cumulative readings is their difference', growth.uncachedInputTokens === 80)
+check('every bucket is differenced independently', growth.outputTokens === 15 && growth.cacheReadTokens === 4)
+check('a bucket that did not move contributes nothing', growth.cacheWriteTokens === 0)
+
+// A projection replaying from zero (a version bump, a rewritten log) must not
+// register as negative spend.
+const backwards = bucketDelta(buckets(500, 100), buckets(10, 2))
+check('a reading that moved backwards clamps to zero rather than going negative', isEmptyBuckets(backwards))
+
 // ------------------------------------------------------------- recordUsage
 
 let ledger: UsageLedger = {}
-ledger = recordUsage(ledger, 'anthropic', 1200, 300)
-check('a fresh provider gets a row', ledger['anthropic']?.promptTokens === 1200)
-check('completion tokens land too', ledger['anthropic']?.completionTokens === 300)
+ledger = recordUsage(ledger, 'anthropic', buckets(1200, 300, 40, 10))
+check('a fresh provider gets a row', ledger['anthropic']?.uncachedInputTokens === 1200)
+check('output tokens land too', ledger['anthropic']?.outputTokens === 300)
+check('cache buckets are kept separately, not folded into the prompt total', ledger['anthropic']?.cacheReadTokens === 40)
 check('one turn is counted', ledger['anthropic']?.turns === 1)
 
-ledger = recordUsage(ledger, 'anthropic', 800, 150)
-check('a second turn accumulates rather than overwrites', ledger['anthropic']?.promptTokens === 2000)
+ledger = recordUsage(ledger, 'anthropic', buckets(800, 150))
+check('a second turn accumulates rather than overwrites', ledger['anthropic']?.uncachedInputTokens === 2000)
 check('turns keeps counting', ledger['anthropic']?.turns === 2)
+check('a bucket absent from the second turn keeps the first turn\'s figure', ledger['anthropic']?.cacheReadTokens === 40)
 
-ledger = recordUsage(ledger, 'openai-codex', 500, 100)
-check('a second provider gets its own row', ledger['openai-codex']?.promptTokens === 500)
-check('the first provider is untouched by the second', ledger['anthropic']?.promptTokens === 2000)
+ledger = recordUsage(ledger, 'openai-codex', buckets(500, 100))
+check('a second provider gets its own row', ledger['openai-codex']?.uncachedInputTokens === 500)
+check('the first provider is untouched by the second', ledger['anthropic']?.uncachedInputTokens === 2000)
 
 const before = ledger
-const after = recordUsage(ledger, 'anthropic', 0, 0)
+const after = recordUsage(ledger, 'anthropic', noBuckets())
 check('a turn with no measured usage records nothing', after === before)
 check('and does not inflate the turn count', after['anthropic']?.turns === 2)
 
-const negative = recordUsage(ledger, 'anthropic', -50, -10)
-check('a negative delta is clamped rather than subtracted', negative === ledger)
-
-const unnamed = recordUsage({}, '', 100, 50)
-check('an empty provider id files under "unknown" rather than vanishing', unnamed['unknown']?.promptTokens === 100)
+const unnamed = recordUsage({}, '', buckets(100, 50))
+check(
+  'an empty provider id files under "unknown" rather than vanishing',
+  unnamed['unknown']?.uncachedInputTokens === 100,
+)
 
 // ---------------------------------------------------------------- totalUsage
 
 const total = totalUsage(ledger)
-check('total sums every provider\'s prompt tokens', total.promptTokens === 2500)
-check('total sums every provider\'s completion tokens', total.completionTokens === 550)
+check('total sums every provider\'s uncached input', total.uncachedInputTokens === 2500)
+check('total sums every provider\'s output', total.outputTokens === 550)
+check('total sums every provider\'s cache reads', total.cacheReadTokens === 40)
 check('total sums every provider\'s turns', total.turns === 3)
-check('an empty ledger totals to zero', totalUsage({}).promptTokens === 0)
+check('an empty ledger totals to zero', grandTotal(totalUsage({})) === 0)
 
 // ---------------------------------------------------------------- sortedRows
 
@@ -92,38 +132,43 @@ const hour = 60 * 60 * 1000
 const t0 = 1_700_000_000_000 // an arbitrary but fixed anchor
 
 let entries: UsageEntry[] = []
-entries = recordUsageEntry(entries, 'anthropic', 100, 20, t0)
+entries = recordUsageEntry(entries, 'anthropic', buckets(100, 20, 10), t0)
 check('a fresh entry log gets one row', entries.length === 1)
 check('the entry carries its own timestamp', entries[0]?.at === t0)
+check('the entry carries every bucket', entries[0]?.cacheReadTokens === 10)
 
-entries = recordUsageEntry(entries, 'anthropic', 50, 10, t0 + hour)
-entries = recordUsageEntry(entries, 'zai', 30, 5, t0 + hour)
+entries = recordUsageEntry(entries, 'anthropic', buckets(50, 10), t0 + hour)
+entries = recordUsageEntry(entries, 'zai', buckets(30, 5), t0 + hour)
 check('later turns append rather than replace', entries.length === 3)
 
-const zeroDelta = recordUsageEntry(entries, 'anthropic', 0, 0, t0 + 2 * hour)
+const zeroDelta = recordUsageEntry(entries, 'anthropic', noBuckets(), t0 + 2 * hour)
 check('a turn with no measured usage adds no entry', zeroDelta.length === entries.length)
 
 // windowUsage over a short window excludes what fell outside it.
 const sessionWindow = windowUsage(entries, SESSION_MS, t0 + hour)
-check('a window includes entries inside it', sessionWindow['anthropic']?.promptTokens === 150)
-check('a window sums every provider active inside it', sessionWindow['zai']?.promptTokens === 30)
+check('a window includes entries inside it', sessionWindow['anthropic']?.uncachedInputTokens === 150)
+check('a window carries the cache buckets through', sessionWindow['anthropic']?.cacheReadTokens === 10)
+check('a window sums every provider active inside it', sessionWindow['zai']?.uncachedInputTokens === 30)
 
 const tinyWindow = windowUsage(entries, 1, t0 + hour + 2 * hour)
 check('a window far past every entry includes nothing', Object.keys(tinyWindow).length === 0)
 
 const wideWindow = windowUsage(entries, WEEK_MS, t0 + hour)
-check('a window wide enough to cover everything matches the lifetime totals', wideWindow['anthropic']?.promptTokens === 150)
+check(
+  'a window wide enough to cover everything matches the lifetime totals',
+  wideWindow['anthropic']?.uncachedInputTokens === 150,
+)
 
 // Pruning: an entry older than WEEK_MS relative to the newest write is dropped.
 let pruning: UsageEntry[] = []
-pruning = recordUsageEntry(pruning, 'anthropic', 10, 0, t0)
-pruning = recordUsageEntry(pruning, 'anthropic', 10, 0, t0 + WEEK_MS + hour)
+pruning = recordUsageEntry(pruning, 'anthropic', buckets(10, 0), t0)
+pruning = recordUsageEntry(pruning, 'anthropic', buckets(10, 0), t0 + WEEK_MS + hour)
 check('an entry older than the longest window is pruned on the next write', pruning.length === 1)
 check('the surviving entry is the newer one', pruning[0]?.at === t0 + WEEK_MS + hour)
 
 // A write that itself carries no usage still prunes stale entries.
-let pruneOnly: UsageEntry[] = [{ provider: 'anthropic', promptTokens: 5, completionTokens: 0, at: t0 }]
-pruneOnly = recordUsageEntry(pruneOnly, 'anthropic', 0, 0, t0 + WEEK_MS + hour)
+let pruneOnly: UsageEntry[] = [{ provider: 'anthropic', ...buckets(5, 0), at: t0 }]
+pruneOnly = recordUsageEntry(pruneOnly, 'anthropic', noBuckets(), t0 + WEEK_MS + hour)
 check('a zero-delta write still prunes what is now stale', pruneOnly.length === 0)
 
 // ------------------------------------------------------- DeepSeek peak hours

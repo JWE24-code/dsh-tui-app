@@ -4,35 +4,92 @@
  * a question the per-turn footer counter was never meant to answer, because
  * it shows only the turn on screen and forgets it the moment another begins.
  *
+ * The numbers folded in here are the Harness's own **billed** counts, read from
+ * its `tokenUsage` session projection: four buckets, priced differently by
+ * every provider, and already retry-aware. They are deliberately *not* the
+ * footer's `↑`/`↓` pair, which is context pressure — the size of the prompt the
+ * next request would send. Those two were conflated in an earlier version of
+ * this module, which subtracted one context size from another and called the
+ * difference "spend"; the result was a ledger that could not be right, because
+ * the quantity it differenced was never cumulative in the first place. A turn
+ * that shrinks its own context by compacting genuinely spends tokens, and the
+ * old arithmetic recorded that as zero — or, across a switch to a longer
+ * conversation, as a spike that never happened.
+ *
  * This module is pure: it knows nothing about the Harness, a session, a
  * stream chunk, or ANSI color — `tui/usage-view.ts` draws what this module
- * computes. The call site owns the one fact this module cannot supply — how
- * many tokens a just-settled turn actually spent, and when — and hands it
- * over as plain numbers.
+ * computes. The call site owns the one fact this module cannot supply — what
+ * the provider billed for a just-settled turn, and when — and hands it over as
+ * plain numbers.
  * @module moqi-tui/usage
  */
+/**
+ * The four token buckets every provider reports separately because it prices
+ * them separately. Named exactly as the Harness's `tokenUsage` projection
+ * names them, so a reader comparing the two sees one vocabulary rather than a
+ * translation layer.
+ */
+export interface TokenBuckets {
+    /** Prompt tokens billed at the full input rate — cache reads excluded. */
+    uncachedInputTokens: number;
+    /** Generated tokens, reasoning included where a provider bills it as output. */
+    outputTokens: number;
+    /** Prompt tokens served from the provider's cache, billed at a discount. */
+    cacheReadTokens: number;
+    /** Prompt tokens written into the provider's cache, sometimes billed at a premium. */
+    cacheWriteTokens: number;
+}
 /** Running totals for one provider route. */
-export interface ProviderUsage {
-    promptTokens: number;
-    completionTokens: number;
+export interface ProviderUsage extends TokenBuckets {
     /** Turns that reported usable usage; a turn with none is not counted. */
     turns: number;
 }
 /** The whole ledger, keyed by provider route id. */
 export type UsageLedger = Record<string, ProviderUsage>;
+/** A zeroed set of buckets, for folds and for an absent ledger row. */
+export declare function noBuckets(): TokenBuckets;
+/** Every prompt-side token, however it was billed. */
+export declare function promptTotal(buckets: TokenBuckets): number;
+/** Every token a route moved, prompt and output together. */
+export declare function grandTotal(buckets: TokenBuckets): number;
+/** Whether a set of buckets carries nothing at all. */
+export declare function isEmptyBuckets(buckets: TokenBuckets): boolean;
 /**
- * Fold one turn's own token spend into the ledger, keyed by the provider that
+ * The exact movement between two readings of one session's cumulative billed
+ * usage.
+ *
+ * The Harness's `tokenUsage` projection folds the whole durable log, so it only
+ * ever grows for a given session. Differencing two readings of it therefore
+ * yields exactly what the turns in between were billed — which is what makes
+ * this subtraction sound where the old context-pressure one was not. A bucket
+ * that somehow moved backwards (a log rewritten underneath us, a projection
+ * version bump replaying from zero) clamps to zero rather than recording a
+ * negative spend.
+ */
+export declare function bucketDelta(before: TokenBuckets, after: TokenBuckets): TokenBuckets;
+/**
+ * Fold one turn's own billed spend into the ledger, keyed by the provider that
  * handled it.
  *
- * Deltas of zero or less record nothing: a turn interrupted before its first
- * usage frame, or one where the counters did not move, is not evidence the
+ * An empty delta records nothing: a turn interrupted before its first usage
+ * sample, or one the projection could not account for, is not evidence the
  * provider was used for free — it is evidence there is nothing to attribute,
  * and a phantom row with `turns: 1` and `0` tokens would only be confusing in
  * the dashboard.
  */
-export declare function recordUsage(ledger: UsageLedger, provider: string, promptDelta: number, completionDelta: number): UsageLedger;
+export declare function recordUsage(ledger: UsageLedger, provider: string, delta: TokenBuckets): UsageLedger;
 /** Sum every provider's usage into one row, for a grand-total line. */
 export declare function totalUsage(ledger: UsageLedger): ProviderUsage;
+/**
+ * What share of this route's prompt tokens the provider served from its cache.
+ *
+ * Worth surfacing because it is the one number in the ledger a user can act
+ * on: a high rate means a long conversation is costing a fraction of what its
+ * context size suggests, and a rate that collapses is usually a cache that
+ * stopped being hit. Returns `undefined` when there were no prompt tokens at
+ * all, since "0% of nothing" is a statement about the data, not the cache.
+ */
+export declare function cacheHitRate(buckets: TokenBuckets): number | undefined;
 /** `12345` → `12,345`, so a token count reads at a glance. */
 export declare function grouped(value: number): string;
 /** Provider rows, busiest (by total tokens) first. */
@@ -48,15 +105,13 @@ export declare const CHART_WIDTH = 24;
  */
 export declare function filledWidth(share: number): number;
 /**
- * One turn's own token spend, timestamped so it can be folded into a rolling
+ * One turn's own billed spend, timestamped so it can be folded into a rolling
  * window (the last 5 hours, the last 7 days) rather than only a lifetime
  * total. Kept separate from {@link UsageLedger}'s running totals, which have
  * no timestamp to roll off of and are not meant to: "lifetime" has no window.
  */
-export interface UsageEntry {
+export interface UsageEntry extends TokenBuckets {
     provider: string;
-    promptTokens: number;
-    completionTokens: number;
     /** Epoch millis the turn settled at. */
     at: number;
 }
@@ -78,11 +133,11 @@ export declare const SESSION_MS: number;
  * Append one turn to the rolling-window log, pruning anything older than
  * {@link WEEK_MS} from this turn's own timestamp.
  *
- * Deltas of zero or less record nothing, the same guard {@link recordUsage}
- * applies and for the same reason — an interrupted turn is not evidence of
- * free usage, it is evidence there is nothing to attribute.
+ * An empty delta records nothing, the same guard {@link recordUsage} applies
+ * and for the same reason — an interrupted turn is not evidence of free usage,
+ * it is evidence there is nothing to attribute.
  */
-export declare function recordUsageEntry(entries: readonly UsageEntry[], provider: string, promptDelta: number, completionDelta: number, at: number): UsageEntry[];
+export declare function recordUsageEntry(entries: readonly UsageEntry[], provider: string, delta: TokenBuckets, at: number): UsageEntry[];
 /**
  * Fold every entry within `windowMs` of `now` into a ledger shaped exactly
  * like {@link recordUsage} builds, so a caller renders a rolling window with

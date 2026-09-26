@@ -661,29 +661,96 @@ rather than faked.
 
 That footer is one turn's own numbers, on the session on screen — it says
 nothing about what came before, or what another provider has been spending in
-another tab. `/usage` is a full-screen colored dashboard instead: every
-provider you have actually used, in three rolling windows, kept across a
-restart the same way the composer history is.
+another tab. `/usage` is a full-screen colored dashboard instead, in two halves:
+what each provider's plan has left, and what this app has actually spent.
 
 ```
  Usage
 
- Session (5h)
-   anthropic  ████████████████████████████████░░░░░░  71%   1,204
-   zai        █████████████░░░░░░░░░░░░░░░░░░░░░░░░░░  29%      70
+ Plans & limits
+   DeepSeek
+     balance 55.88 USD (55.88 topped up)  available
+     ✓ off-peak now (half price) — peak resumes in 1d 11h
+     off-peak is also the faster window: less queueing under load
+   z.ai (GLM coding plan) — GLM Coding Lite
+     Session (5h)  ░░░░░░░░░░░░░░░░░░░░░░░░    1%  26/2,000  resets in 3h 45m
+     Week (7d)     ███████████████░░░░░░░░░   62%  6,170/10,000  resets in 4d 5h
+     renews in 64d 10h — 43.2 quarterly
+   Claude (Pro/Max)
+     Session (5h)  █████████████████████░░░   89%  resets in 3h 4m
+     Week (7d)     ██████░░░░░░░░░░░░░░░░░░   25%  resets in 6d 11h
 
- Week (7d)
-   anthropic  ██████████████████████████████░░░░░░░░░░  78%  22,110
-   zai        ██████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  22%   6,134
+ Token spend — session (5h)
+   zai       ████████████████████████  100%  16,623  ↑16,616 ↓7 8% cached
 
- Lifetime
-   anthropic  ████████████████████████████████░░░░░░░░  71%  54,550
-   zai        █████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░  29%  22,122
+ Token spend — week (7d)
+   zai       ████████████████████████  100%  16,623  ↑16,616 ↓7 8% cached
 
- ⚠ DeepSeek peak pricing now — off-peak (half price) in 1h 12m
+ Token spend — lifetime
+   zai       ████████████████████████  100%  16,623  ↑16,616 ↓7 8% cached
 
  esc back
 ```
+
+### Plans and limits, as the provider reports them
+
+A local tally of tokens cannot say what a plan has left. Only the provider knows
+what a prepaid balance is down to, how much of a 5-hour window is gone, or when
+either resets — so `/usage` asks it, using the credentials already in the
+Harness credential store. Nothing is read from a file here and no secret is ever
+printed: a token goes into an `Authorization` header and nowhere else.
+
+| Route | What it reports | Read with |
+|---|---|---|
+| DeepSeek | prepaid balance, granted vs topped up, availability, peak-window state | `DEEPSEEK_API_KEY` |
+| z.ai | plan tier, 5-hour and weekly credit windows, renewal date and price | `ZAI_API_KEY` |
+| Claude (Pro/Max) | 5-hour session and 7-day week utilization | the sign-in `/providers` stored |
+
+Every probe runs concurrently and every one of them resolves: a provider that is
+unset, down, or slow costs its own block a line of explanation and leaves the
+rest of the pane intact, because the comparison across providers is the whole
+point of it. The pane paints immediately with what it already knows and fills in
+the plan half as answers land.
+
+The parsers refuse rather than improvise. A field that is missing or of the wrong
+type yields "could not be read", never a zero dressed up as a measurement —
+which matters more than it sounds: z.ai reports a window's limit in a field
+called `usage` and its consumption in `currentValue`, so the obvious reading of
+that payload would show a plan as fully spent while it was 1% used. The z.ai
+parser matches those two names exactly and cross-checks them against the row's
+own `remaining`, so a future rename surfaces as a refusal instead of silently
+inverting the bars.
+
+DeepSeek's own published peak/off-peak schedule — standard pricing 01:00–04:00
+and 06:00–10:00 UTC on weekdays, half price every other hour including all of
+both weekend days — rides along with its balance, so the pane doubles as a
+reminder of whether the clock favors answering now or waiting. Two separate
+facts are worth stating, because they bite differently: pricing is predictable
+and countdown-able, while throughput is the one that surprises people. DeepSeek
+enforces no per-account request limit and does not reject requests for load; at
+peak it holds the connection open instead, so what you experience is not an
+error but a turn that takes far longer than usual. Chinese public holidays are
+also off-peak by DeepSeek's own page but are not modeled here, for want of a
+holiday calendar to check against.
+
+### Token spend, as the Harness billed it
+
+The bottom half is every provider this app has actually routed a turn to, in
+three rolling windows, kept across a restart the same way the composer history
+is. The numbers are the Harness's own **billed** counts, read from its
+`tokenUsage` session projection: four separately-priced buckets, already
+retry-aware, so a retried attempt counts as the second billed attempt it is.
+
+They are deliberately *not* the footer's `↑`/`↓` pair, which is **context
+pressure** — the size of the prompt the next request would send. Conflating the
+two is a mistake this app made and has since corrected: it used to subtract one
+context size from another and record the difference as spend. That could not be
+right, because context pressure is not cumulative. A turn whose context had
+shrunk since the last one produced a negative difference, clamped to zero, and
+recorded a full prompt's worth of real spend as nothing at all; a turn that
+grew the context recorded a number resembling neither. Bumping the persisted
+state version discards those old figures rather than carrying them forward under
+names that would imply they had ever been right.
 
 **Session (5h)** and **week (7d)** are rolling windows — the same shape
 Anthropic's Claude Pro/Max and z.ai's GLM coding plan both rate-limit on —
@@ -693,18 +760,16 @@ busiest-first order is what keeps a provider's color the same in every section
 it appears in, even the ones it has aged out of. Each bar is that provider's
 share of every token spent *in that window*, not of the busiest provider in
 it — two providers within a few points of each other read as two bars close
-in length, not one full bar and a shorter one exaggerating the gap. A turn
-interrupted before it reported any usage adds nothing rather than a phantom
-zero-token row.
+in length, not one full bar and a shorter one exaggerating the gap.
 
-DeepSeek's own published peak/off-peak schedule — standard pricing 01:00–04:00
-and 06:00–10:00 UTC on weekdays, half price every other hour including all of
-both weekend days — earns a status line once a DeepSeek-routed provider has
-been used, so the pane doubles as a reminder of whether the clock favors
-answering now or waiting. Chinese public holidays are also off-peak by
-DeepSeek's own page but are not modeled here, for want of a holiday calendar
-to check against. `/usage reset` clears the ledger and the rolling-window log
-alike — there is no undo, the same as `/delete`.
+Each row splits prompt from output, because they are priced differently
+everywhere and one total hides which way a route is expensive, and reports the
+share of its prompt tokens the provider served from cache when there is one to
+report — the one figure here you can act on, since a rate that collapses is
+usually a cache that stopped being hit. A turn whose usage could not be read
+adds nothing rather than a phantom zero-token row, and its spend is not lost:
+it lands the next time a reading succeeds. `/usage reset` clears the ledger and
+the rolling-window log alike — there is no undo, the same as `/delete`.
 
 `/jobs` lists what ran or is still running in the background for this session —
 state, elapsed time, and the producer's own detail line — with running jobs
@@ -793,7 +858,8 @@ src/
   index.ts         the app plugin: Harness wiring, key dispatch, commands
   startup.ts       the cmdline provider (--resume/--model/--thinking/...)
   persist.ts       durable history, preferences, and open sessions under $DSH_HOME
-  usage.ts         per-provider token ledger, rolling windows, and DeepSeek's peak hours
+  usage.ts         billed-token ledger, rolling windows, and DeepSeek's peak hours
+  credits.ts       asking each provider what its plan has left (credentials + network)
   sessions-store.ts  session storage paths and deletion under $DSH_HOME
   version.ts       reads the package version for --version and /update
   tui/
@@ -803,7 +869,8 @@ src/
     state.ts       composer, palette, picker, history, token formatting
     stream.ts      projects assistant-stream chunks onto the transcript
     export.ts      transcript to markdown for /export
-    usage-view.ts  the /usage dashboard: colored bars, drawn from usage.ts's data
+    usage-view.ts  the /usage dashboard: plan limits above, token spend below
+    credits.ts     provider-response parsers and plan drawing, pure and tested
     osc52.ts       the clipboard escape, wrapped for tmux/screen when one is in the middle
     markdown.ts    markdown to ANSI plus a small syntax highlighter
     text.ts        ANSI-aware width, wrap, truncate
@@ -881,7 +948,7 @@ regression still would.
     provider parses the real command line.
   - `dsh --profile tui </dev/null` boots the bundle and exits on the non-TTY
     guard.
-- **33 suites, 1616 assertions**, covering rendering (including a pty round
+- **34 suites, 1765 assertions**, covering rendering (including a pty round
   trip through the real screen, decoder, and frame renderer), streaming
   projection, queueing, steering, persistence, the usage ledger and its
   colored dashboard, session storage, cross-session search, the panels
@@ -918,7 +985,7 @@ regression still would.
 ## Release steps
 
 ```sh
-npm test              # 30 suites, including the pty round trip
+npm test              # 34 suites, including the pty round trip
 npm run test:live     # a real model turn through the TUI (needs credentials)
 npm run test:package  # packs, installs into a clean prefix + DSH_HOME, boots
 npm run build         # and commit lib/ — see below
