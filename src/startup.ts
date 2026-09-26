@@ -31,7 +31,7 @@ export interface TuiStartupValues {
   thinking: boolean
   /** Context budget override; absent means use the model's own capacity. */
   contextLimit: number | undefined
-  /** Report mouse events so the wheel scrolls; off by default. */
+  /** Report mouse events so the wheel scrolls and the session bar clicks; on by default. */
   mouse: boolean
   /** Ring the bell when a session's turn finishes; on by default. */
   bell: boolean
@@ -60,7 +60,8 @@ function tuiCommand(): Command {
     .option('--model <name>', 'model to select for this run')
     .option('--thinking', 'start with reasoning output visible')
     .option('--context-limit <tokens>', "context budget override; default is the model's own capacity")
-    .option('--no-mouse', 'disable mouse reporting; the wheel scrolls and the tab bar clicks by default, and shift selects text for the terminal')
+    .option('--mouse', 'report mouse events (the default; accepted for compatibility)')
+    .option('--no-mouse', 'disable mouse reporting, so plain drag selects text for the terminal')
     .option('--no-bell', 'stay silent when a session finishes instead of ringing the terminal bell')
     .option('--vim', 'modal vim editing in the composer: esc for normal mode, i to insert')
     .option('--no-restore', 'start with one empty session instead of reopening the last ones')

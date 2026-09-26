@@ -186,7 +186,7 @@ export interface Config {
   model?: string
   thinking?: boolean
   contextLimit?: number
-  /** Report mouse events so the wheel scrolls; off by default. */
+  /** Report mouse events so the wheel scrolls and the session bar clicks; on by default. */
   mouse?: boolean
   /** Ring the terminal bell when a session's turn finishes; on by default. */
   bell?: boolean

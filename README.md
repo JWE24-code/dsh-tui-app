@@ -116,6 +116,7 @@ npm run typecheck
 | `--model <name>` | Model to select for this run |
 | `--thinking` | Start with reasoning output visible |
 | `--context-limit <n>` | Override the context budget; the default is the model's own capacity |
+| `--mouse` | Report mouse events; the default now, and accepted so an alias that passes it keeps working |
 | `--no-mouse` | Disable mouse reporting; the wheel scrolls and the tab bar clicks by default, and shift selects text for the terminal |
 | `--no-bell` | Stay silent when a session finishes |
 | `--vim` | Modal vim editing in the composer: `esc` for normal mode, `i` to insert |

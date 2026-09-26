@@ -23,7 +23,7 @@ export interface TuiStartupValues {
     thinking: boolean;
     /** Context budget override; absent means use the model's own capacity. */
     contextLimit: number | undefined;
-    /** Report mouse events so the wheel scrolls; off by default. */
+    /** Report mouse events so the wheel scrolls and the session bar clicks; on by default. */
     mouse: boolean;
     /** Ring the bell when a session's turn finishes; on by default. */
     bell: boolean;
