@@ -581,6 +581,15 @@ The choice is saved with the rest of the durable state and applied before the
 first frame, so it survives a restart. Switching repaints the whole screen at
 once, since a palette change moves the color of nearly every cell.
 
+The theme is **per session**, the same way the model is: `/theme` in one
+conversation leaves every other tab on the palette it already had, switching
+tabs repaints in whichever one that tab is on, and a new session starts from
+the theme of the one it was opened from rather than the stored default —
+which is still what a session started *without* one, like the very first tab
+of a fresh launch, falls back to. A restored session brings its own theme back
+too; one this build no longer ships (renamed or removed since) falls back to
+the current default instead of leaving the tab on nothing.
+
 ## Vim mode
 
 `--vim` at launch turns the composer modal. It starts in INSERT — enabling vim

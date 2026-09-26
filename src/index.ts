@@ -104,6 +104,7 @@ import {
   type VoicePhase,
 } from './tui/view.ts'
 import { activeTheme, applyTheme, listThemes } from './tui/theme.ts'
+import { DEFAULT_THEME, findTheme } from './tui/themes.ts'
 import { projectStreamChunk } from './tui/stream.ts'
 import { applyToolEvent } from './tui/tooldetail.ts'
 import { transcriptMarkdown } from './tui/export.ts'
@@ -372,6 +373,12 @@ interface SessionTab {
   selection: ModelSelectionRef
   /** Label of the model this session is using, for the footer. */
   modelName: string
+  /**
+   * Color palette this session is using. Per tab, the same way the model is:
+   * a new session starts from the theme of the one it was opened from, then
+   * `/theme` in either conversation leaves the other alone.
+   */
+  theme: string
   /** Context capacity resolved for this session's model. */
   contextLimit: number
   /**
@@ -412,6 +419,7 @@ function newTab(id: string): SessionTab {
     logSyncedSeq: 0,
     selection: { current: undefined, assembled: undefined },
     modelName: '',
+    theme: DEFAULT_THEME,
     contextLimit: 0,
     background: new Map(),
   }
@@ -577,6 +585,11 @@ class TuiApp {
     this.history.load(this.persisted.inputHistory)
     if (this.config.thinking === undefined) this.showThinking = this.persisted.thinking
     if (this.persisted.theme !== undefined) applyTheme(this.persisted.theme)
+    // The first tab was constructed before the persisted default was known;
+    // sync it now so a `--resume`/fresh-session boot (which reuses this same
+    // tab rather than replacing it) does not carry the built-in default while
+    // the screen shows the persisted one.
+    this.tab.theme = activeTheme()
     if (this.persisted.lang !== undefined && isLang(this.persisted.lang)) setLanguage(this.persisted.lang)
     if (this.persisted.expandTools !== undefined) this.expandTools = this.persisted.expandTools
     // Flags and remembered devices are one list from here on; a duplicate
@@ -607,7 +620,12 @@ class TuiApp {
       this.tab.title = this.config.resumeSessionId
       this.tab.messages = readHistory(this.tab.agent.session)
       await this.tab.agent.whenIdle()
-    } else if (!(await this.restoreSessions(current))) {
+    } else if (await this.restoreSessions(current)) {
+      // The restored active tab may carry a theme that diverged from the
+      // persisted default in an earlier session; the boot-time apply above
+      // only knew the default, not what this particular tab last used.
+      applyTheme(this.tab.theme)
+    } else {
       const sessionId = brandString<SessionId>(`session-${randomUUID()}`)
       const created = await agents.create({ sessionId, meta: { cwd }, agentOptions, setup })
       this.tab.agent = created.agent
@@ -984,6 +1002,14 @@ class TuiApp {
 
     const tab = newTab(session.id)
     tab.title = session.title
+    // A theme this build no longer ships (a renamed or removed one) falls
+    // back to the current default rather than leaving the tab on whatever
+    // `newTab` happened to hardcode.
+    if (session.theme !== undefined && findTheme(session.theme) !== undefined) {
+      tab.theme = session.theme
+    } else {
+      tab.theme = activeTheme()
+    }
     // The model a conversation was switched to belongs to that conversation
     // rather than to the profile, so it comes back per tab instead of from the
     // shared default, which the user may have left pointing somewhere else.
@@ -1344,6 +1370,9 @@ class TuiApp {
     // Looking at it counts as reading it.
     const tab = this.tabs[index]
     if (tab !== undefined && tab.status === 'ready') tab.status = 'idle'
+    // Each session can be on its own palette; switching to one repaints in
+    // its color, not whichever tab last called /theme.
+    if (tab !== undefined) applyTheme(tab.theme)
     // Which tab you were on is part of what a restart should bring back.
     this.persistSoon()
     this.picker.hide()
@@ -1364,6 +1393,8 @@ class TuiApp {
     if (closed?.streaming === true) this.setStatus('closed a session that was still replying')
     if (this.active >= this.tabs.length) this.active = this.tabs.length - 1
     else if (index < this.active) this.active -= 1
+    // Closing a tab can leave a different one active, on its own palette.
+    applyTheme(this.tab.theme)
     // A closed session must not come back on the next launch.
     this.persistSoon()
     this.screen.invalidate()
@@ -2768,7 +2799,7 @@ class TuiApp {
   private openSessions(): PersistedSession[] {
     return this.tabs
       .filter((tab) => tab.agent !== undefined)
-      .map((tab) => ({ id: tab.id, model: tab.modelName, title: tab.title }))
+      .map((tab) => ({ id: tab.id, model: tab.modelName, title: tab.title, theme: tab.theme }))
   }
 
   /**
@@ -3659,6 +3690,9 @@ class TuiApp {
     const tab = newTab(String(sessionId))
     tab.selection.current = seed
     tab.modelName = String(seed.model)
+    // Same rule as the model just above: the theme of the conversation it was
+    // opened from, not the stored default, then diverges independently.
+    tab.theme = this.tab.theme
 
     try {
       const created = await agents.create({
@@ -3776,6 +3810,7 @@ class TuiApp {
     const carried = this.tab.selection.current
     const sessionId = brandString<SessionId>(`session-${randomUUID()}`)
     const tab = newTab(String(sessionId))
+    tab.theme = this.tab.theme
     if (carried !== undefined) {
       tab.selection.current = carried
       tab.modelName = String(carried.model)
@@ -4267,6 +4302,10 @@ class TuiApp {
       this.paint()
       return
     }
+    // This tab's own choice. The app-wide default a brand new session starts
+    // from is still `activeTheme()`, persisted separately below — the two
+    // agree here because this is also the active tab.
+    this.tab.theme = activeTheme()
     this.persistSoon()
     this.setStatus(`theme → ${activeTheme()}`)
     this.screen.invalidate()

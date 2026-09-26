@@ -108,6 +108,33 @@ try {
   check('save/load round-trips each session model', tabs.sessions.map((s) => s.model).join(',') === 'model-a,model-b')
   check('save/load round-trips each session title', tabs.sessions.map((s) => s.title).join(',') === 'first,second')
   check('save/load round-trips the active tab', tabs.activeSession === 1)
+  check('a session with no theme saved round-trips to undefined', tabs.sessions[0]?.theme === undefined)
+
+  // ---------------------------------------------- round trip: session theme
+
+  await saveState(
+    state({ sessions: [{ id: 'session-a', model: '', title: '', theme: 'gruvbox' }], activeSession: 0 }),
+    env,
+  )
+  const withTheme = await loadState(env)
+  check('save/load round-trips a session\'s own theme', withTheme.sessions[0]?.theme === 'gruvbox')
+
+  const { writeFile: writeThemeFixture } = await import('node:fs/promises')
+  await writeThemeFixture(
+    statePath(env),
+    JSON.stringify({
+      ...state(),
+      version: VERSION,
+      sessions: [
+        { id: 'session-a', theme: 'nord' },
+        { id: 'session-b', theme: 42 },
+      ],
+    }),
+    'utf8',
+  )
+  const mixedTheme = await loadState(env)
+  check('a well-formed session theme survives', mixedTheme.sessions[0]?.theme === 'nord')
+  check('a non-string session theme reads as undefined rather than throwing', mixedTheme.sessions[1]?.theme === undefined)
   check('the fallback carries no sessions', (await loadState({ DSH_HOME: join(sandbox, 'nothing') })).sessions.length === 0)
   check('the fallback carries no usage', (await loadState({ DSH_HOME: join(sandbox, 'nothing') })).usage['anthropic'] === undefined)
 

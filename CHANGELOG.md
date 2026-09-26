@@ -8,6 +8,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Per-session color themes.** `/theme` used to set one palette for the whole
+  app; it is now per session, the same way the model already is. Switching
+  tabs repaints in whichever theme that tab is on, a new session starts from
+  the theme of the one it was opened from (then diverges independently), and
+  a restored session brings its own theme back — falling back to the current
+  default if it named a theme this build no longer ships.
 - **Sign in to Claude Pro/Max and ChatGPT/Codex.** `/providers` opens a picker
   over every credential `ctx.authorization` knows how to obtain — a
   human-guided sign-in a plain API key cannot replace. This app adds no

@@ -30,6 +30,8 @@ export interface PersistedSession {
   model: string
   /** The tab's title, normally the opening prompt; empty until one is sent. */
   title: string
+  /** Color palette that session was using; absent means "use the default". */
+  theme?: string
 }
 
 /** What survives a restart of the app. */
@@ -160,6 +162,7 @@ function readSession(value: unknown): PersistedSession | undefined {
     id,
     model: typeof record['model'] === 'string' ? record['model'] : '',
     title: typeof record['title'] === 'string' ? record['title'] : '',
+    theme: typeof record['theme'] === 'string' ? record['theme'] : undefined,
   }
 }
 
