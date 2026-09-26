@@ -273,6 +273,25 @@ many.update(
 const withPalette = assertFrame('palette', snapshot({ palette: many, rows: 20 }))
 check('palette is drawn', withPalette.some((line) => stripAnsi(line).includes('/command0')))
 
+// The palette caps at 3 visible rows and scrolls, however tall the terminal
+// and however many commands match, so it stays a quick lookup rather than
+// growing to fill the screen.
+check(
+  'palette shows only 3 rows even with room and matches to spare',
+  withPalette.some((line) => stripAnsi(line).includes('/command1')) &&
+    withPalette.some((line) => stripAnsi(line).includes('/command2')) &&
+    !withPalette.some((line) => stripAnsi(line).includes('/command3')),
+)
+many.move(1)
+many.move(1)
+many.move(1)
+const paletteScrolled = assertFrame('palette scrolled', snapshot({ palette: many, rows: 20 }))
+check(
+  'palette scrolls to keep the selection visible past row 3',
+  paletteScrolled.some((line) => stripAnsi(line).includes('/command3')) &&
+    !paletteScrolled.some((line) => stripAnsi(line).includes('/command0')),
+)
+
 // The picker replaces the transcript.
 const picker = new Picker()
 picker.show('sessions', 'Sessions', [
@@ -282,6 +301,23 @@ picker.show('sessions', 'Sessions', [
 const withPicker = assertFrame('picker', snapshot({ picker }))
 check('picker shows its title', withPicker.some((line) => stripAnsi(line).includes('Sessions')))
 check('picker shows a row', withPicker.some((line) => stripAnsi(line).includes('first')))
+
+// The open-sessions list alone advertises "x close" in its footer — that key
+// only closes a tab there, so nowhere else should claim it.
+const openSessions = new Picker()
+openSessions.show('open', 'Open sessions', [
+  { id: '0', title: '1. first', subtitle: 'idle' },
+  { id: '1', title: '2. second', subtitle: 'idle' },
+])
+const withOpenSessions = assertFrame('open sessions', snapshot({ picker: openSessions }))
+check(
+  'open-sessions footer offers x to close',
+  withOpenSessions.some((line) => stripAnsi(line).includes('x close')),
+)
+check(
+  'the resume list does not offer x close',
+  !withPicker.some((line) => stripAnsi(line).includes('x close')),
+)
 
 // ------------------------------------------------- model picker and filtering
 

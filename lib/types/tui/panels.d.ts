@@ -1,8 +1,10 @@
 /**
- * Trust-surface panels: tool approval, `ask_user_question`, and plan review.
+ * Trust-surface panels: tool approval, `ask_user_question`, plan review, and a
+ * running sign-in.
  *
- * These are the moments the agent stops and asks a human, so they own the
- * keyboard while open and answer through the Harness waterfall seams. Like the
+ * These are the moments something stops and asks a human — the agent, or a
+ * `ctx.authorization` flow doing its own OAuth dance — so they own the
+ * keyboard while open and answer through the Harness's own seams. Like the
  * rest of `tui/`, this module is pure state plus a view shape — the app layer
  * does the Cordis wiring and the renderer does the drawing.
  * @module
@@ -19,11 +21,11 @@ export interface PanelRow {
 /**
  * The panel the renderer draws in place of the transcript.
  *
- * `detail` is markdown: an approval's reason, a question's supporting text, or
- * a plan under review.
+ * `detail` is markdown: an approval's reason, a question's supporting text, a
+ * plan under review, or a sign-in flow's own notice.
  */
 export interface PanelView {
-    kind: 'approval' | 'questions';
+    kind: 'approval' | 'questions' | 'login';
     title: string;
     detail: string;
     rows: PanelRow[];
@@ -121,5 +123,54 @@ export declare class QuestionsPanel {
     back(): boolean;
     /** The finished answer set, in question order. */
     answers(): QuestionAnswer[];
+    view(): PanelView;
+}
+/** One notice a running `ctx.authorization` flow reported, mid-attempt. */
+export interface LoginNotice {
+    message: string;
+    url?: string;
+    code?: string;
+}
+/** One question a running flow needs answered before it can continue. */
+export type LoginPrompt = {
+    kind: 'text' | 'secret';
+    message: string;
+    placeholder?: string;
+} | {
+    kind: 'select';
+    message: string;
+    options: readonly {
+        id: string;
+        label: string;
+        description?: string;
+    }[];
+};
+/**
+ * One running `ctx.authorization` attempt, surfaced as a panel.
+ *
+ * Deliberately thin: this tracks only what is on screen — the last notice,
+ * the live prompt if one is waiting, and what has been typed or highlighted
+ * for it. Resolving a prompt is the caller's job, the same split
+ * {@link ApprovalPanel} and {@link QuestionsPanel} keep, because answering one
+ * is a call into the Harness and this module may depend on nothing from it.
+ */
+export declare class LoginPanel {
+    readonly label: string;
+    notice: LoginNotice | undefined;
+    prompt: LoginPrompt | undefined;
+    private cursor;
+    private draft;
+    constructor(label: string);
+    /**
+     * Put a fresh prompt on screen, or clear it once it has been answered.
+     * Starts from empty every time — a stale draft or highlight from the
+     * question before it must never bleed into this one.
+     */
+    setPrompt(prompt: LoginPrompt | undefined): void;
+    move(delta: number): void;
+    typeText(chunk: string): void;
+    backspaceText(): void;
+    /** What `enter` would answer the live prompt with, or undefined for none waiting. */
+    answer(): string | undefined;
     view(): PanelView;
 }

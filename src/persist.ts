@@ -1,7 +1,7 @@
 /**
  * Small durable state for the terminal app: composer history, UI
- * preferences, and the sessions that were open, kept as one JSON file under
- * `$DSH_HOME`.
+ * preferences, the sessions that were open, and the usage ledger, kept as one
+ * JSON file under `$DSH_HOME`.
  *
  * Everything here is best-effort by design. The app must run on a read-only
  * or missing home just as well as on a writable one — persistence is a
@@ -13,6 +13,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
+import type { UsageLedger } from './usage.ts'
 
 /**
  * One session that was open when the app last exited.
@@ -52,10 +53,12 @@ export interface PersistedState {
   sessions: PersistedSession[]
   /** Index into {@link PersistedState.sessions} of the tab that was on screen. */
   activeSession: number
+  /** Per-provider token usage, accumulated across every session so far. */
+  usage: UsageLedger
 }
 
 /** Version of the on-disk shape, so a future change can migrate or discard. */
-const STATE_VERSION = 2
+const STATE_VERSION = 3
 
 /**
  * How many sessions a single restore will bring back.
@@ -71,7 +74,35 @@ type OnDisk = PersistedState & { version?: number }
 
 /** The state used when there is nothing readable on disk. */
 function fallbackState(): PersistedState {
-  return { inputHistory: [], thinking: false, peers: [], sessions: [], activeSession: 0 }
+  return { inputHistory: [], thinking: false, peers: [], sessions: [], activeSession: 0, usage: {} }
+}
+
+/** Coerce one on-disk usage row, or reject it outright. */
+function readUsageRow(value: unknown): { promptTokens: number; completionTokens: number; turns: number } | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const record = value as Record<string, unknown>
+  const promptTokens = record['promptTokens']
+  const completionTokens = record['completionTokens']
+  const turns = record['turns']
+  if (
+    typeof promptTokens !== 'number' || !Number.isFinite(promptTokens) ||
+    typeof completionTokens !== 'number' || !Number.isFinite(completionTokens) ||
+    typeof turns !== 'number' || !Number.isFinite(turns)
+  ) {
+    return undefined
+  }
+  return { promptTokens, completionTokens, turns }
+}
+
+/** Coerce the on-disk usage ledger, dropping any row that does not parse. */
+function readUsage(value: unknown): UsageLedger {
+  if (typeof value !== 'object' || value === null) return {}
+  const ledger: UsageLedger = {}
+  for (const [provider, entry] of Object.entries(value as Record<string, unknown>)) {
+    const row = readUsageRow(entry)
+    if (row !== undefined) ledger[provider] = row
+  }
+  return ledger
 }
 
 /** Where the state file lives: `$DSH_HOME/tui-state.json`, default `~/.dsh`. */
@@ -142,6 +173,7 @@ export function decodeState(raw: string): PersistedState {
     expandTools: parsed.expandTools === false ? false : undefined,
     sessions,
     activeSession,
+    usage: readUsage(parsed.usage),
   }
 }
 

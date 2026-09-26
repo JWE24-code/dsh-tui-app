@@ -118,9 +118,10 @@ npm run typecheck
 | `--context-limit <n>` | Override the context budget; the default is the model's own capacity |
 | `--mouse` | Report mouse events so the wheel scrolls (costs terminal text selection) |
 | `--no-bell` | Stay silent when a session finishes |
+| `--vim` | Modal vim editing in the composer: `esc` for normal mode, `i` to insert |
 | `--peer <host>` | Device to include in the fleet overview; repeatable |
 | `--no-restore` | Start with one empty session instead of reopening the last ones |
-| `--version` | Print the app version — shadowed by the launcher's own `--version`, so use `/about` inside the app |
+| `--version` | Print the app version |
 
 `MOQI_CONTEXT_LIMIT` sets the same budget; `MOQI_THEME=light\|dark`
 overrides background detection; `NO_COLOR` disables styling.
@@ -131,7 +132,7 @@ overrides background detection; `NO_COLOR` disables styling.
 |---|---|
 | `enter` | Send · steers into a running reply · `ctrl+j` inserts a newline |
 | `↑` / `↓` | On the first / last composer row, recall earlier prompts |
-| `/` | Command palette · `tab` accepts · `esc` dismisses |
+| `/` | Command palette, 3 rows at a time and scrolling past that · `tab` accepts · `esc` dismisses |
 | `@` | File completion over the workspace · `tab`/`enter` accepts · `esc` dismisses |
 | `?` | Open the key reference on an empty composer |
 | `esc` | Interrupt a streaming reply |
@@ -330,6 +331,10 @@ which wins over both.
 Writing is atomic and best-effort: a read-only home means the app runs exactly
 as before, just without recall across restarts.
 
+The `/usage` ledger lives in the same file and survives a restart the same
+way, so a provider's running total is a lifetime one, not a per-session one;
+see [Rate, cache, usage, and background jobs](#rate-cache-usage-and-background-jobs).
+
 ## One list of every device
 
 ```sh
@@ -360,25 +365,30 @@ on a port and no credential is added** — SSH is already the boundary. A record
 that stops being refreshed reads as `stale` rather than claiming forever that
 it is running.
 
-`enter` opens the session when this app already owns it. It cannot open
-anything else — another process has no terminal here — so instead it copies the
-command that does reach it. `p` goes one better for reading: it fetches the
-peer's session log over the same SSH channel and shows the last turns as a
-read-only preview, decoded here. Nothing on the peer is written, nothing new
-listens, and the path is built with the store's own segment encoder, so a
-hostile presence record cannot reach outside its own session directory.
-
-`d` dispatches instead of reading: the composer's text is sent to that peer's
-`headless` profile (`--dispatch-profile` changes it), which answers one task and
-exits. The prompt is quoted for the remote shell and SSH runs in `BatchMode`, so
-a password prompt can never swallow the terminal; the peer's answer comes back
-as an overlay, and the session it left behind stays the peer's to resume.
-
-The copied command is:
+`enter` switches to the session when this app already owns it. For a remote
+one it hands the terminal to a real `ssh -t`, running that device's `tui`
+profile and resuming the session — the same keys, the same screen, as if it
+were local. Leaving that remote session (its own `/close` or `/exit`, or just
+disconnecting) returns you to the fleet overview here, repainted. This needs
+this process to actually be attached to a terminal on both ends; short of
+that (piped output, a non-interactive run) it falls back to copying the
+command instead, the same as it always did:
 
 ```sh
 ssh -t laptop 'dsh --profile tui --resume session-…'
 ```
+
+`p` goes one better for reading without leaving: it fetches the peer's session
+log over the same SSH channel and shows the last turns as a read-only preview,
+decoded here. Nothing on the peer is written, nothing new listens, and the
+path is built with the store's own segment encoder, so a hostile presence
+record cannot reach outside its own session directory.
+
+`d` dispatches instead of attaching: the composer's text is sent to that peer's
+`headless` profile (`--dispatch-profile` changes it), which answers one task and
+exits. The prompt is quoted for the remote shell and SSH runs in `BatchMode`, so
+a password prompt can never swallow the terminal; the peer's answer comes back
+as an overlay, and the session it left behind stays the peer's to resume.
 
 See [docs/fleet-overview.md](docs/fleet-overview.md) for why presence files
 rather than the session store.
@@ -415,7 +425,10 @@ than one open, a bar appears under the header:
 seen. `alt+1`…`alt+9` jump straight to a session, `alt+n`/`alt+p` cycle,
 `/sessions` opens a picker — which also carries a **+ Ask the harness in a new
 session** entry, so starting one does not depend on already knowing `ctrl+n` —
-and `/close` closes the current one.
+and `/close` closes the current one. `x` on a row in that picker closes *that*
+session without leaving the list, so tidying up several at once is not a
+switch-then-`/close`-then-reopen-the-picker loop; the last session cannot be
+closed this way either, the same guard `/close` already has.
 
 **The bell.** When a session's turn finishes, the terminal bell rings — that is
 the point of running several: you start one, go and do something else, and get
@@ -464,6 +477,59 @@ model and context bar always describe the session on screen. A new session
 starts from the model of the session it was opened from, then diverges
 independently.
 
+## Signing in — Claude Pro/Max, ChatGPT/Codex, and others
+
+`/login` opens a picker over every credential `ctx.authorization` knows how to
+obtain — a human-guided sign-in a plain API key cannot replace, because
+getting it means a conversation: open this page, paste that code, pick an
+account. This app adds no provider knowledge of its own; it renders whatever
+flows are registered, the same way `/plugins` lists whatever packages compose
+the profile. In practice, mounting `@deepseek-ai/dsh-llm-pi-ai` — the same
+adapter a coding-plan route like z.ai's already goes through — is what
+registers a flow for each provider it ships a login for, **Anthropic (Claude
+Pro/Max)** and **OpenAI Codex (ChatGPT Plus/Pro)** included, from the moment
+the plugin mounts, whether or not a route for it is configured yet.
+
+Picking an entry with one method starts it right away; more than one opens a
+second picker for the method first (OAuth, a pasted key, and so on — most
+preferred listed first). What happens next is whatever that flow asks for,
+rendered as a panel that owns the keyboard until it settles:
+
+```
+ Sign in — Claude Pro/Max
+
+ Continue in your browser
+
+ Open: https://console.anthropic.com/oauth/authorize?...
+ Code: `WXYZ-1234`
+
+ esc cancels the sign-in
+```
+
+A flow that needs an answer — a pasted code, an account to pick from a list —
+prompts for it the same way; `enter` submits, `esc` declines just that
+question if the flow can recover, or withdraws the whole attempt if nothing is
+being asked yet. Success or cancellation lands as an ordinary status line, and
+the stored credential outlives the app: signing in once is enough for every
+session afterward, until you sign out through whatever surface manages that
+credential store.
+
+Signing in authenticates the route; it does not by itself add one to `/model`.
+That is a profile-level `dsh-llm-pi-ai` config, the same as any other route
+(see its own README for the full field list):
+
+```yaml
+- name: '@deepseek-ai/dsh-llm-pi-ai'
+  config:
+    providers:
+      anthropic: {}
+      openai-codex: {}
+```
+
+No `apiKeyEnv` is needed on either — a stored sign-in authenticates its route
+beneath any key configured there, so an empty config is enough once `/login`
+has run.
+
 ## Color palettes
 
 `/theme` opens a picker over the palettes the app ships with; `/theme <name>`
@@ -495,9 +561,9 @@ once, since a palette change moves the color of nearly every cell.
 
 ## Vim mode
 
-`/vim` turns the composer modal. It starts in INSERT — enabling vim never
-changes what typing does — and `esc` switches to NORMAL, where the footer shows
-the mode and bare keys follow vim:
+`--vim` at launch turns the composer modal. It starts in INSERT — enabling vim
+never changes what typing does — and `esc` switches to NORMAL, where the
+footer shows the mode and bare keys follow vim:
 
 | NORMAL key | |
 |---|---|
@@ -554,13 +620,37 @@ matching line with its project and speaker, and opens the session on `enter`.
 The store is read-only here; a compressed log on a Node too old to decode it is
 reported as skipped, never as a wrong answer.
 
-## Rate, cache, and background jobs
+## Rate, cache, usage, and background jobs
 
 The footer carries what the provider reports: prompt and completion tokens, the
 context bar, output tokens per second for the last settled turn, and the share
 of the prompt that came from the provider's cache. Each is displayed only when
 it is real — an unmeasurable rate or a cache hit on an empty prompt is omitted
 rather than faked.
+
+That footer is one turn's own numbers, on the session on screen — it says
+nothing about what came before, or what another provider has been spending in
+another tab. `/usage` is the running total instead: every provider you have
+actually used, tallied one settled turn at a time, across every session, and
+kept across a restart the same way the composer history is.
+
+```
+**Usage**
+
+| Provider | Prompt | Completion | Total | Turns |
+| --- | ---: | ---: | ---: | ---: |
+| anthropic | 48,210 | 6,340 | 54,550 | 12 |
+| zai | 19,004 | 3,118 | 22,122 | 9 |
+| **total** | **67,214** | **9,458** | **76,672** | **21** |
+
+Counted per finished turn, from the tokens each provider itself reported —
+not an estimate, and not a cost, since pricing is not this app's to know.
+```
+
+Busiest provider first. A turn interrupted before it reported any usage adds
+nothing rather than a phantom zero-token row, so the turn count only ever
+means turns that actually answered. `/usage reset` clears the ledger — there
+is no undo, the same as `/delete`.
 
 `/jobs` lists what ran or is still running in the background for this session —
 state, elapsed time, and the producer's own detail line — with running jobs
@@ -621,7 +711,7 @@ alongside the app's own:
 | Command | Owner |
 |---|---|
 | `/compact`, and any other plugin command | `ctx.commands` (the Harness registry) |
-| `/new`, `/sessions`, `/close`, `/resume`, `/delete`, `/rename`, `/model`, `/theme`, `/thinking`, `/tools`, `/export`, `/find`, `/unqueue`, `/interrupt`, `/copy`, `/rewind`, `/fork`, `/tree`, `/jobs`, `/about`, `/update`, `/help`, `/exit` (`/quit`) | this app |
+| `/new`, `/sessions`, `/close`, `/resume`, `/delete`, `/rename`, `/model`, `/theme`, `/plugins`, `/thinking`, `/tools`, `/usage`, `/export`, `/find`, `/unqueue`, `/interrupt`, `/copy`, `/rewind`, `/fork`, `/tree`, `/jobs`, `/mcp`, `/lang`, `/login`, `/dispatch`, `/fleet`, `/peer`, `/update`, `/help`, `/exit` (`/quit`) | this app |
 
 Unknown commands are dispatched to `ctx.commands.execute()` and only reported
 as unknown if the registry also rejects them.
@@ -649,8 +739,9 @@ src/
   index.ts         the app plugin: Harness wiring, key dispatch, commands
   startup.ts       the cmdline provider (--resume/--model/--thinking/...)
   persist.ts       durable history, preferences, and open sessions under $DSH_HOME
+  usage.ts         per-provider token ledger for /usage, folded in one turn at a time
   sessions-store.ts  session storage paths and deletion under $DSH_HOME
-  version.ts       reads the package version for --version and /about
+  version.ts       reads the package version for --version and /update
   tui/
     screen.ts      raw mode, alternate screen, per-line diffed painting
     keys.ts        escape-sequence decoding, chunk-tolerant
@@ -734,10 +825,11 @@ regression still would.
     provider parses the real command line.
   - `dsh --profile tui </dev/null` boots the bundle and exits on the non-TTY
     guard.
-- **30 suites, 1472 assertions**, covering rendering (including a pty round
+- **31 suites, 1546 assertions**, covering rendering (including a pty round
   trip through the real screen, decoder, and frame renderer), streaming
-  projection, queueing, steering, persistence, session storage, cross-session
-  search, the panels, the plugin seam, i18n, the fleet, and the render cache.
+  projection, queueing, steering, persistence, the usage ledger, session
+  storage, cross-session search, the panels (including a running sign-in),
+  the plugin seam, i18n, the fleet, and the render cache.
 - **The boot-to-model turn is now automated, on demand.** `npm run test:live`
   (`MOQI_LIVE=1`) boots `dsh --profile tui` under `script(1)`, types a
   prompt, and asserts that the model's answer reaches a painted frame before
@@ -757,6 +849,12 @@ regression still would.
 - **`/mcp` reads, it does not manage.** The MCP client is configured by
   composition, so the pane reports the bridge-prefixed tools that are actually
   mounted and where to declare a server — there is no runtime add/remove.
+- **`/login` knows no provider by name.** It renders whatever `ctx.authorization`
+  flows are registered; Claude Pro/Max and ChatGPT/Codex show up once
+  `dsh-llm-pi-ai` is mounted, the same as any other OAuth provider it or
+  another plugin adds a login for. The service is optional and probed like
+  `ctx.sessionQuery`, so a profile without it reports that plainly instead of
+  the command doing nothing.
 - **Published** to npm as [`moqi-tui`](https://www.npmjs.com/package/moqi-tui).
   Listing on dshfind is the one release step still done by hand.
 

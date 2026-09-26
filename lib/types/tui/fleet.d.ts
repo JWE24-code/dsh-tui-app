@@ -97,6 +97,16 @@ export declare function formatAge(seconds: number): string;
  */
 export declare function jumpCommand(session: FleetSession, profile?: string): string;
 /**
+ * The argv to actually run {@link jumpCommand}'s remote half, for spawning
+ * directly rather than copying to a clipboard.
+ *
+ * The session id is quoted for the remote shell the same way a dispatched
+ * prompt is: a presence record names the id, and a presence record can come
+ * from a compromised or merely buggy peer, so nothing here trusts it to be
+ * shell-safe on its own.
+ */
+export declare function jumpArgv(session: FleetSession, profile?: string): string[];
+/**
  * Quote one argument for a POSIX shell.
  *
  * A prompt is arbitrary text and is about to travel through `ssh`, which hands

@@ -4,6 +4,57 @@ All notable changes to Moqi are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Sign in to Claude Pro/Max and ChatGPT/Codex.** `/login` opens a picker
+  over every credential `ctx.authorization` knows how to obtain — a
+  human-guided sign-in a plain API key cannot replace. This app adds no
+  provider knowledge of its own: it renders whatever flows are registered,
+  the same way `/plugins` lists whatever packages compose the profile.
+  Mounting `@deepseek-ai/dsh-llm-pi-ai` registers a flow for Anthropic (Claude
+  Pro/Max) and OpenAI Codex (ChatGPT Plus/Pro) — the two providers it ships a
+  login for — from the moment it mounts. A flow's notices and questions are
+  rendered as a panel that owns the keyboard until the attempt settles: a
+  message plus a page and code to act on, or a prompt (text, a pasted secret,
+  or a choice of accounts) that `enter` answers and `esc` declines. Signing
+  in authenticates the route; adding it to `/model` is still an ordinary
+  `dsh-llm-pi-ai` config, documented in the README.
+- **`/usage`** — a running per-provider token ledger: prompt, completion, and
+  turns, tallied once per finished turn from what the provider itself
+  reported, kept across a restart the same way the composer history is, and
+  sorted busiest-first. Unlike the footer's per-turn counter, this is the
+  total across every session, not just the one on screen. A turn that
+  reported no usage (interrupted before its first frame) adds nothing rather
+  than a phantom zero-token row. `/usage reset` clears the ledger.
+- **`x` closes a session from the `/sessions` list** without leaving it, so
+  tidying up several open sessions is not a switch-then-`/close`-then-reopen
+  loop. The last session still cannot be closed this way, the same guard
+  `/close` already enforces.
+- **`/fleet` now attaches to a remote session instead of only reading about
+  it.** `enter` on a remote row hands the terminal to a real `ssh -t` running
+  that device's `tui` profile and resuming the session — the same keys, the
+  same screen, as if it were local — and returns to the overview, repainted,
+  once that session ends. Falls back to the previous copy-the-command
+  behavior when this process is not attached to a real terminal on both
+  ends, since there is then nothing to hand over.
+
+### Changed
+
+- **The `/` command palette caps at 3 visible rows and scrolls**, however
+  tall the terminal and however many commands match, so it stays a quick
+  lookup rather than growing to fill the screen on every keystroke.
+- **`--vim` replaces the `/vim` command.** Modal editing is an editing
+  preference set once at launch, not a mid-conversation toggle, so it moved
+  to a startup flag alongside `--mouse` and `--no-bell`.
+
+### Removed
+
+- **`/about`** — version and connection details are still available through
+  the README and `/update`'s own version check; the overlay duplicated
+  information the footer and `--version` already carry.
+
 ## [0.2.1]
 
 ### Fixed

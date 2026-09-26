@@ -24,6 +24,7 @@ import {
   formatAge,
   isPresenceRecord,
   isValidPeer,
+  jumpArgv,
   jumpCommand,
   mergeFleet,
   renderFleet,
@@ -153,6 +154,22 @@ check(
   'a remote session is reached over ssh with a tty',
   jumpCommand(remoteRow as NonNullable<typeof remoteRow>) ===
     "ssh -t workstation 'dsh --profile tui --resume s-ready'",
+)
+
+// jumpArgv is jumpCommand's remote half as argv, for spawning directly
+// instead of copying a string to a clipboard.
+check(
+  'jumpArgv reaches the same host and profile',
+  jumpArgv(remoteRow as NonNullable<typeof remoteRow>).slice(0, 2).join(' ') === '-t workstation',
+)
+check(
+  'jumpArgv resumes the same session',
+  (jumpArgv(remoteRow as NonNullable<typeof remoteRow>)[2] ?? '').includes(`--resume ${shellQuote('s-ready')}`),
+)
+const hostileRow = { ...(remoteRow as NonNullable<typeof remoteRow>), sessionId: "s; rm -rf /'; echo" }
+check(
+  "jumpArgv quotes a hostile session id for the remote shell rather than trusting a peer's presence record",
+  (jumpArgv(hostileRow)[2] ?? '').includes(shellQuote(hostileRow.sessionId)),
 )
 
 // -------------------------------------------------------------- rendering
@@ -392,7 +409,9 @@ check(
   paneFrame.lines.every((line) => displayWidth(line) <= 100),
 )
 
-// Enter's label has to tell the truth: a remote session cannot be opened here.
+// Enter's label has to tell the truth: both a local switch and a remote
+// attach read as "open" now that a remote row is actually attached to over
+// SSH, rather than merely having its command copied.
 pane.selected = 0
 check(
   'a local row offers to open',
@@ -400,8 +419,8 @@ check(
 )
 pane.selected = 1
 check(
-  'a remote row offers the ssh command instead',
-  render(fleetSnapshot(pane)).lines.map((line) => stripAnsi(line)).some((line) => line.includes('enter copy ssh')),
+  'a remote row offers to open too',
+  render(fleetSnapshot(pane)).lines.map((line) => stripAnsi(line)).some((line) => line.includes('enter open')),
 )
 
 // An empty fleet must still render a usable pane rather than collapsing.

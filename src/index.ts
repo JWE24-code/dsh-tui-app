@@ -32,6 +32,12 @@ import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-cmdline'
 import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import {
+  AuthorizationDeclinedError,
+  type AuthorizationEntry,
+  type AuthorizationInteraction,
+  type AuthorizationPrompt,
+} from '@deepseek-ai/dsh-authorization'
 
 import { Screen } from './tui/screen.ts'
 import type { Key } from './tui/keys.ts'
@@ -78,9 +84,11 @@ import { decodeLogBytes, parseLogMessages, searchSessions, type SessionHit } fro
 import { encodeSegment, projectKey, sessionsRoot } from './sessions-store.ts'
 import {
   ApprovalPanel,
+  LoginPanel,
   QuestionsPanel,
   interpretApproval,
   type ApprovalDecision,
+  type LoginPrompt,
 } from './tui/panels.ts'
 import { UserQuestionError } from '@deepseek-ai/dsh-user-questions'
 import type { AskUserQuestionAnswer, AskUserQuestionRequest } from '@deepseek-ai/dsh-user-questions'
@@ -122,7 +130,16 @@ import {
   type PersistedState,
 } from './persist.ts'
 import { VERSION } from './version.ts'
-import { FleetView, dispatchArgv, isValidPeer, jumpCommand, mergeFleet } from './tui/fleet.ts'
+import { recordUsage, renderUsage, type UsageLedger } from './usage.ts'
+import {
+  FleetView,
+  dispatchArgv,
+  isValidPeer,
+  jumpArgv,
+  jumpCommand,
+  mergeFleet,
+  type FleetSession,
+} from './tui/fleet.ts'
 import { PresencePublisher, type PresenceInput } from './presence.ts'
 import { collectFleet, localDshHome, type PeerConfig } from './fleet-sources.ts'
 import {
@@ -154,6 +171,8 @@ export interface Config {
   mouse?: boolean
   /** Ring the terminal bell when a session's turn finishes; on by default. */
   bell?: boolean
+  /** Modal vim editing for the composer; off by default. */
+  vim?: boolean
   /**
    * Devices to include in the fleet overview, as anything `ssh` accepts.
    * Empty means the overview shows only this machine.
@@ -179,6 +198,7 @@ export const Config: z<Config> = z.object({
   contextLimit: z.number(),
   mouse: z.boolean(),
   bell: z.boolean(),
+  vim: z.boolean(),
   peers: z.array(z.string()),
   restore: z.boolean(),
   voiceModel: z.string(),
@@ -222,6 +242,7 @@ const BUILTIN_COMMANDS: readonly PaletteCommand[] = [
   },
   { name: 'thinking', args: '', description: "Toggle display of the reasoner's chain-of-thought" },
   { name: 'tools', args: '', description: 'List the tools this agent can call' },
+  { name: 'usage', args: '[reset]', description: 'Token usage by provider, tallied since it was last reset' },
   { name: 'export', args: '[file]', description: 'Write this transcript to a markdown file' },
   {
     name: 'find',
@@ -245,7 +266,7 @@ const BUILTIN_COMMANDS: readonly PaletteCommand[] = [
   { name: 'jobs', args: '[kill <id>]', description: 'Background jobs: what is running and what finished' },
   { name: 'mcp', args: '', description: 'MCP servers whose tools are mounted here' },
   { name: 'lang', args: '[en|zh-CN]', description: 'Interface language' },
-  { name: 'vim', args: '', description: 'Toggle vim modal editing in the composer' },
+  { name: 'login', args: '', description: 'Sign in to a provider — Claude Pro/Max, ChatGPT/Codex, and others' },
   {
     name: 'dispatch',
     args: '<device> <task>',
@@ -253,7 +274,6 @@ const BUILTIN_COMMANDS: readonly PaletteCommand[] = [
   },
   { name: 'fleet', args: '', description: 'Sessions across every device (ctrl+f)' },
   { name: 'peer', args: '[add|rm <host>]', description: 'Devices the fleet overview reads' },
-  { name: 'about', args: '', description: 'Show version and connection information' },
   { name: 'update', args: '', description: 'Update this package from npm, if a newer one exists' },
   { name: 'help', args: '', description: 'Show keys and commands' },
   { name: 'exit', args: '', description: 'Quit dsh' },
@@ -311,6 +331,8 @@ interface SessionTab {
   cacheWriteTokens: number
   /** Output tokens at the moment the current turn began, for a turn's own rate. */
   turnStartTokens: number
+  /** Prompt tokens at the moment the current turn began, for its own usage tally. */
+  turnStartPromptTokens: number
   /** Output tokens per second for the last settled turn. */
   tps: number
   scrollBack: number
@@ -336,7 +358,7 @@ interface SessionTab {
    * that created it, so `/model` in one conversation never reroutes another.
    */
   selection: ModelSelectionRef
-  /** Label of the model this session is using, for the footer and /about. */
+  /** Label of the model this session is using, for the footer. */
   modelName: string
   /** Context capacity resolved for this session's model. */
   contextLimit: number
@@ -369,6 +391,7 @@ function newTab(id: string): SessionTab {
     cacheReadTokens: 0,
     cacheWriteTokens: 0,
     turnStartTokens: 0,
+    turnStartPromptTokens: 0,
     tps: 0,
     scrollBack: 0,
     queued: [],
@@ -409,10 +432,18 @@ class TuiApp {
   /** Index of the transcript turn under selection, if any. */
   private selectedTurn: number | undefined
   /** The trust-surface panel on screen, if any: it owns the keyboard. */
-  private panel: ApprovalPanel | QuestionsPanel | undefined
+  private panel: ApprovalPanel | QuestionsPanel | LoginPanel | undefined
   private readonly pendingApprovals: PendingApproval[] = []
   private readonly pendingQuestions: PendingQuestion[] = []
-  /** Modal vim editing for the composer, off until `/vim` asks for it. */
+  /** The running sign-in's own prompt, when a {@link LoginPanel} is asking one. */
+  private pendingLoginPrompt: { resolve: (value: string) => void; reject: (error: unknown) => void } | undefined
+  /** Withdraws the sign-in a {@link LoginPanel} is running, if one is. */
+  private loginAbort: AbortController | undefined
+  /** What `/login` last listed, indexed the same way its picker rows are. */
+  private loginEntries: readonly AuthorizationEntry[] = []
+  /** The flow `/login` is choosing a method for, between the two pickers. */
+  private loginPendingEntry: AuthorizationEntry | undefined
+  /** Modal vim editing for the composer, off unless `--vim` asked for it at launch. */
   private readonly vim = new Vim()
   /** The extension seam other plugins register shortcuts and a status line into. */
   private readonly tuiHost: TuiHost
@@ -451,8 +482,11 @@ class TuiApp {
     peers: [],
     sessions: [],
     activeSession: 0,
+    usage: {},
   }
   private persistTimer: NodeJS.Timeout | undefined
+  /** Per-provider token totals across every session, restored on launch. */
+  private usageLedger: UsageLedger = {}
 
   /** The cross-device overview, and what this device publishes to it. */
   private readonly fleet = new FleetView()
@@ -497,6 +531,7 @@ class TuiApp {
     this.config = config
     this.exit = exit
     this.showThinking = config.thinking === true
+    this.vim.setEnabled(config.vim === true)
     this.tuiHost = new TuiHost(ctx)
     this.presence = new PresencePublisher(localDshHome())
     this.screen = new Screen({
@@ -520,6 +555,7 @@ class TuiApp {
     // Adopt whatever survived the last run before deciding what to show: the
     // composer history and the thinking preference, both best-effort.
     this.persisted = await loadState()
+    this.usageLedger = this.persisted.usage
     this.history.load(this.persisted.inputHistory)
     if (this.config.thinking === undefined) this.showThinking = this.persisted.thinking
     if (this.persisted.theme !== undefined) applyTheme(this.persisted.theme)
@@ -727,6 +763,55 @@ class TuiApp {
         return
       }
     }
+    if (panel instanceof LoginPanel) {
+      switch (key.name) {
+        case 'up':
+        case 'ctrl+p':
+          panel.move(-1)
+          break
+        case 'down':
+        case 'ctrl+n':
+          panel.move(1)
+          break
+        case 'enter': {
+          const value = panel.answer()
+          const pending = this.pendingLoginPrompt
+          if (value === undefined || pending === undefined) break
+          panel.setPrompt(undefined)
+          this.pendingLoginPrompt = undefined
+          pending.resolve(value)
+          break
+        }
+        case 'esc':
+        case 'ctrl+c': {
+          const pending = this.pendingLoginPrompt
+          if (pending !== undefined) {
+            // A question the flow can recover from: decline just this one,
+            // the same "no" a human gives to any single question.
+            panel.setPrompt(undefined)
+            this.pendingLoginPrompt = undefined
+            pending.reject(new AuthorizationDeclinedError())
+          } else {
+            // Nothing waiting on an answer: esc/ctrl+c withdraws the whole
+            // attempt instead. `begin()` still has to settle asynchronously,
+            // so the panel closes once that promise resolves, not here.
+            this.setStatus('cancelling…')
+            this.loginAbort?.abort()
+          }
+          this.paint()
+          return
+        }
+        case 'backspace':
+          panel.backspaceText()
+          break
+        default:
+          if (key.text !== '') panel.typeText(key.text)
+          break
+      }
+      this.paint()
+      return
+    }
+
     if (panel instanceof ApprovalPanel) {
       switch (key.name) {
         case 'ctrl+v':
@@ -1585,12 +1670,54 @@ class TuiApp {
       this.selectSession(open)
       return
     }
+    if (session.local) {
+      // A local session this app does not have open — another profile's, say.
+      // There is nothing over ssh to attach to, so the old fallback applies.
+      this.fleet.hide()
+      this.copyJumpCommand(session)
+      return
+    }
 
+    this.fleet.hide()
+    void this.attachRemoteSession(session)
+  }
+
+  /** The old behavior: hand over the command instead of running it. */
+  private copyJumpCommand(session: FleetSession): void {
     const command = jumpCommand(session)
     const result = this.writeClipboard(command)
-    this.fleet.hide()
     this.setStatus(result.ok ? `copied: ${command}` : `run: ${command}`)
     this.screen.invalidate()
+    this.paint()
+  }
+
+  /**
+   * Hand the terminal to a real `ssh -t` running the remote profile, so a
+   * remote session is driven exactly like a local one — the same keys, the
+   * same screen — instead of read off a copied command in another window.
+   *
+   * Mirrors {@link editDraft}: the alternate screen is given up for the
+   * duration and repainted on return. Falls back to the old copy-to-clipboard
+   * behavior when this process is not attached to a real terminal on both
+   * ends, since there is then nothing to hand over.
+   */
+  private async attachRemoteSession(session: FleetSession): Promise<void> {
+    if (!Screen.isInteractive()) {
+      this.copyJumpCommand(session)
+      return
+    }
+    this.screen.stop()
+    const code = await new Promise<number>((resolve) => {
+      const child = spawn('ssh', jumpArgv(session), { stdio: 'inherit' })
+      child.on('error', () => resolve(-1))
+      child.on('exit', (exitCode) => resolve(exitCode ?? 0))
+    })
+    this.screen.start()
+    this.screen.invalidate()
+    this.setStatus(
+      code === 0 ? `back from ${session.host}` : `ssh to ${session.host} exited (${String(code)})`,
+      code !== 0,
+    )
     this.paint()
   }
 
@@ -1951,6 +2078,23 @@ class TuiApp {
       case 'ctrl+u':
         this.picker.setQuery('')
         break
+      case 'x': {
+        // Only the open-sessions list closes on this key; everywhere else "x"
+        // is an ordinary character narrowing the query, same as any other key.
+        if (this.picker.kind === 'open') {
+          const item = this.picker.current()
+          if (item !== undefined && item.id !== NEW_SESSION_ROW) {
+            const before = this.tabs.length
+            this.closeSession(Number.parseInt(item.id, 10))
+            // Only rebuild the list once the close actually happened — the
+            // last-session guard sets a status this must not clobber.
+            if (this.tabs.length < before) this.showOpenSessions()
+          }
+          break
+        }
+        if (key.text !== '') this.picker.setQuery(this.picker.query + key.text)
+        break
+      }
       case 'enter': {
         const item = this.picker.current()
         const kind = this.picker.kind
@@ -1967,6 +2111,8 @@ class TuiApp {
         else if (kind === 'rewind') void this.performRewind(Number.parseInt(item.id, 10))
         else if (kind === 'stored') void this.openStoredHit(item)
         else if (kind === 'lang') this.selectLanguage(isLang(item.id) ? item.id : 'en')
+        else if (kind === 'login') this.chooseLoginEntry(item.id)
+        else if (kind === 'login-method') this.beginLoginWithMethod(item.id)
         else void this.openSession(item.id, item.title)
         break
       }
@@ -2475,6 +2621,7 @@ class TuiApp {
       peers: this.peers,
       sessions: this.openSessions(),
       activeSession: this.activeSessionIndex(),
+      usage: this.usageLedger,
     }
     // Synchronous on purpose: this runs on the quit path, where an async write
     // would be abandoned the moment `exit(0)` tears the process down.
@@ -2730,23 +2877,6 @@ class TuiApp {
     this.paint()
   }
 
-  /** Show version and connection details in the transcript pane. */
-  private showAbout(): void {
-    this.showOverlay(
-      [
-        '**moqi**',
-        '',
-        `- version \`${VERSION}\``,
-        `- profile \`tui\`  ·  host \`${hostLabel(process.env['DSH_HOST'] ?? 'local harness')}\``,
-        `- model \`${this.tab.modelName}\``,
-        '',
-        'Moqi — the unspoken understanding between you and your harness.',
-        'See the README for the full key and command reference.',
-      ].join('\n'),
-      'esc to close',
-    )
-  }
-
   // --------------------------------------------------------------- behaviors
 
   /**
@@ -2903,6 +3033,7 @@ class TuiApp {
     tab.streaming = true
     tab.streamStartedAt = Date.now()
     tab.turnStartTokens = tab.completionTokens
+    tab.turnStartPromptTokens = tab.promptTokens
     tab.drainQueue = false
     tab.streamingSegments = []
     tab.streamingReasoning = ''
@@ -2937,6 +3068,18 @@ class TuiApp {
       const turnSeconds = (Date.now() - tab.streamStartedAt) / 1000
       const turnOutput = tab.completionTokens - tab.turnStartTokens
       tab.tps = turnSeconds > 0 && turnOutput > 0 ? turnOutput / turnSeconds : 0
+      // Attribute this turn's own spend to whichever provider actually
+      // answered it — `assembled` is what prompt assembly captured for the
+      // request just settled, which stays correct even though `current`
+      // already points at a switch queued for the next turn.
+      const provider = tab.selection.assembled?.provider ?? tab.selection.current?.provider ?? ''
+      this.usageLedger = recordUsage(
+        this.usageLedger,
+        provider,
+        tab.promptTokens - tab.turnStartPromptTokens,
+        turnOutput,
+      )
+      this.persistSoon()
       tab.streaming = false
       tab.streamStartedAt = 0
       this.releaseSpinner()
@@ -3172,17 +3315,6 @@ class TuiApp {
         return
       }
 
-      case 'vim': {
-        this.vim.setEnabled(!this.vim.enabled)
-        this.setStatus(
-          this.vim.enabled
-            ? 'vim keys on — esc leaves insert, ctrl+c still interrupts'
-            : 'vim keys off',
-        )
-        this.paint()
-        return
-      }
-
       case 'lang': {
         const wanted = rawInput.trim()
         if (wanted === '') {
@@ -3202,6 +3334,36 @@ class TuiApp {
         } else {
           this.setStatus(`unknown language ${wanted} — try en or zh-CN`, true)
         }
+        this.paint()
+        return
+      }
+
+      case 'login': {
+        const auth = this.ctx.get('authorization')
+        if (auth === undefined) {
+          this.setStatus('this profile has no authorization service', true)
+          this.paint()
+          return
+        }
+        const entries = auth.list()
+        if (entries.length === 0) {
+          this.setStatus('nothing here can be signed into — mount a plugin that offers a login', true)
+          this.paint()
+          return
+        }
+        this.loginEntries = entries
+        this.picker.show(
+          'login',
+          'Sign in',
+          entries.map((entry, index) => ({
+            id: String(index),
+            title: entry.label,
+            subtitle: entry.inFlight
+              ? 'already signing in…'
+              : entry.methods.map((method) => method.label).join(' · '),
+          })),
+        )
+        this.setStatus('')
         this.paint()
         return
       }
@@ -3260,10 +3422,6 @@ class TuiApp {
         return
       }
 
-      case 'about':
-        this.showAbout()
-        return
-
       case 'update':
         void this.selfUpdate()
         return
@@ -3283,6 +3441,18 @@ class TuiApp {
             : `**Tools**\n\n${listed.map((tool) => `- \`${tool}\``).join('\n')}`,
           'esc to close',
         )
+        return
+      }
+
+      case 'usage': {
+        if (rawInput.trim() === 'reset') {
+          this.usageLedger = {}
+          this.persistSoon()
+          this.setStatus('usage ledger reset')
+          this.paint()
+          return
+        }
+        this.showOverlay(renderUsage(this.usageLedger), '/usage reset clears it · esc to close')
         return
       }
 
@@ -3605,6 +3775,105 @@ class TuiApp {
     this.screen.invalidate()
     this.setStatus(lang === 'zh-CN' ? '界面语言：简体中文' : 'interface language: English')
     this.paint()
+  }
+
+  // ------------------------------------------------------------------ login
+
+  /**
+   * `enter` on the `/login` list: a single-method flow starts right away, one
+   * offering a choice of methods opens a second, small picker for it first.
+   */
+  private chooseLoginEntry(id: string): void {
+    const entry = this.loginEntries[Number.parseInt(id, 10)]
+    if (entry === undefined) return
+    const [firstMethod] = entry.methods
+    if (entry.methods.length === 1 && firstMethod !== undefined) {
+      this.beginLogin(entry, firstMethod.id)
+      return
+    }
+    this.loginPendingEntry = entry
+    this.picker.show(
+      'login-method',
+      `Sign in — ${entry.label}`,
+      entry.methods.map((method) => ({ id: method.id, title: method.label, subtitle: '' })),
+    )
+    this.paint()
+  }
+
+  /** `enter` on the method picker a multi-method flow opened. */
+  private beginLoginWithMethod(methodId: string): void {
+    const entry = this.loginPendingEntry
+    this.loginPendingEntry = undefined
+    if (entry !== undefined) this.beginLogin(entry, methodId)
+  }
+
+  /**
+   * Run one `ctx.authorization` attempt, surfacing it as a panel.
+   *
+   * The panel and this app's own pending-prompt bookkeeping are the split
+   * {@link ApprovalPanel} and {@link QuestionsPanel} already keep: the panel is
+   * pure view state, and answering a live question is this method's job,
+   * because that is the one part that actually talks to the Harness.
+   */
+  private beginLogin(entry: AuthorizationEntry, method: string): void {
+    const auth = this.ctx.get('authorization')
+    if (auth === undefined) return
+    const controller = new AbortController()
+    const login = new LoginPanel(entry.label)
+    this.panel = login
+    this.loginAbort = controller
+    this.setStatus('')
+    this.paint()
+
+    const interaction: AuthorizationInteraction = {
+      notify: (notice) => {
+        if (this.panel !== login) return
+        login.notice = notice
+        this.paint()
+      },
+      prompt: (prompt) =>
+        new Promise<string>((resolve, reject) => {
+          if (this.panel !== login) {
+            reject(new Error('the sign-in surface is gone'))
+            return
+          }
+          login.setPrompt(toLoginPrompt(prompt))
+          const pending = { resolve, reject }
+          this.pendingLoginPrompt = pending
+          this.paint()
+          // A flow racing a typed code against a browser callback withdraws
+          // only the losing prompt this way, leaving the attempt running.
+          prompt.signal?.addEventListener('abort', () => {
+            if (this.pendingLoginPrompt !== pending) return
+            this.pendingLoginPrompt = undefined
+            if (this.panel === login) login.setPrompt(undefined)
+            reject(new AuthorizationDeclinedError())
+            this.paint()
+          })
+        }),
+    }
+
+    auth
+      .begin({ key: entry.key, method, interaction, signal: controller.signal })
+      .then((outcome) => {
+        this.panel = undefined
+        this.loginAbort = undefined
+        this.pendingLoginPrompt = undefined
+        this.setStatus(
+          outcome.status === 'authorized'
+            ? `signed in — ${entry.label}`
+            : `sign-in cancelled — ${entry.label}`,
+          outcome.status !== 'authorized',
+        )
+        this.paint()
+      })
+      .catch((error: unknown) => {
+        this.panel = undefined
+        this.loginAbort = undefined
+        this.pendingLoginPrompt = undefined
+        this.setStatus(describeError(error), true)
+        this.paint()
+      })
   }
 
   /**
@@ -4383,6 +4652,20 @@ function mediaTypeOf(path: string): 'image/png' | 'image/jpeg' | 'image/webp' | 
 function describeError(error: unknown): string {
   if (error instanceof Error) return error.message
   return String(error)
+}
+
+/**
+ * Narrow a Harness `AuthorizationPrompt` to the shape {@link LoginPanel} draws.
+ *
+ * Drops only the prompt's own `signal` — the caller wires that separately,
+ * since `LoginPanel` may depend on nothing from the Harness, abort signals
+ * included.
+ */
+function toLoginPrompt(prompt: AuthorizationPrompt): LoginPrompt {
+  if (prompt.kind === 'select') {
+    return { kind: 'select', message: prompt.message, options: prompt.options }
+  }
+  return { kind: prompt.kind, message: prompt.message, placeholder: prompt.placeholder }
 }
 
 /**

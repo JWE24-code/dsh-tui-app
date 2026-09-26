@@ -1,13 +1,14 @@
 /**
  * Small durable state for the terminal app: composer history, UI
- * preferences, and the sessions that were open, kept as one JSON file under
- * `$DSH_HOME`.
+ * preferences, the sessions that were open, and the usage ledger, kept as one
+ * JSON file under `$DSH_HOME`.
  *
  * Everything here is best-effort by design. The app must run on a read-only
  * or missing home just as well as on a writable one — persistence is a
  * convenience, never a dependency.
  * @module moqi-tui/persist
  */
+import type { UsageLedger } from './usage.ts';
 /**
  * One session that was open when the app last exited.
  *
@@ -45,6 +46,8 @@ export interface PersistedState {
     sessions: PersistedSession[];
     /** Index into {@link PersistedState.sessions} of the tab that was on screen. */
     activeSession: number;
+    /** Per-provider token usage, accumulated across every session so far. */
+    usage: UsageLedger;
 }
 /**
  * How many sessions a single restore will bring back.

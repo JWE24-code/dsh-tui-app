@@ -34,11 +34,11 @@ import {
 } from '../src/persist.ts'
 
 /** The current on-disk version, as the writer stamps it. */
-const VERSION = 2
+const VERSION = 3
 
 /** A state with only the fields a case cares about spelled out. */
 function state(partial: Partial<PersistedState> = {}): PersistedState {
-  return { inputHistory: [], thinking: false, peers: [], sessions: [], activeSession: 0, ...partial }
+  return { inputHistory: [], thinking: false, peers: [], sessions: [], activeSession: 0, usage: {}, ...partial }
 }
 
 /** A remembered session, defaulting the fields a case is not about. */
@@ -100,6 +100,36 @@ try {
   check('save/load round-trips each session title', tabs.sessions.map((s) => s.title).join(',') === 'first,second')
   check('save/load round-trips the active tab', tabs.activeSession === 1)
   check('the fallback carries no sessions', (await loadState({ DSH_HOME: join(sandbox, 'nothing') })).sessions.length === 0)
+  check('the fallback carries no usage', (await loadState({ DSH_HOME: join(sandbox, 'nothing') })).usage['anthropic'] === undefined)
+
+  // -------------------------------------------------- round trip: usage
+
+  await saveState(
+    state({ usage: { anthropic: { promptTokens: 1200, completionTokens: 300, turns: 2 } } }),
+    env,
+  )
+  const withUsage = await loadState(env)
+  check('save/load round-trips a usage row', withUsage.usage['anthropic']?.promptTokens === 1200)
+  check('save/load round-trips the turn count', withUsage.usage['anthropic']?.turns === 2)
+
+  const { writeFile: writeUsageFixture } = await import('node:fs/promises')
+  await writeUsageFixture(
+    statePath(env),
+    JSON.stringify({
+      ...state(),
+      version: VERSION,
+      usage: {
+        anthropic: { promptTokens: 10, completionTokens: 5, turns: 1 },
+        broken: { promptTokens: 'nope', completionTokens: 5, turns: 1 },
+        alsoBroken: 'not even an object',
+      },
+    }),
+    'utf8',
+  )
+  const mixedUsage = await loadState(env)
+  check('a well-formed usage row survives', mixedUsage.usage['anthropic']?.promptTokens === 10)
+  check('a usage row with a non-numeric field is dropped', mixedUsage.usage['broken'] === undefined)
+  check('a usage row that is not an object is dropped', mixedUsage.usage['alsoBroken'] === undefined)
 
   // ------------------------------------------------- unreadable states
 

@@ -55,6 +55,16 @@ import type { PanelView } from './panels.ts'
 /** Most file-completion rows listed at once before the popup scrolls. */
 const MAX_AT_ROWS = 6
 
+/**
+ * Most slash-command rows listed at once before the popup scrolls.
+ *
+ * Kept small deliberately: the palette sits right above the composer, and a
+ * long match list (the command table is 30+ entries) would otherwise grow the
+ * popup to fill whatever room the terminal has, pushing the transcript out of
+ * the way for something that is supposed to be a quick lookup.
+ */
+const MAX_PALETTE_ROWS = 3
+
 /** Rows of chrome the layout reserves around the transcript. */
 const HEADER_ROWS = 2
 const FOOTER_ROWS = 1
@@ -193,7 +203,7 @@ export function layout(snapshot: Snapshot): Layout {
       FOOTER_ROWS -
       MIN_VIEWPORT_ROWS -
       POPUP_BORDER_ROWS
-    paletteRows = Math.max(Math.min(snapshot.palette.matches.length, available), 0)
+    paletteRows = Math.max(Math.min(snapshot.palette.matches.length, MAX_PALETTE_ROWS, available), 0)
   }
 
   const paletteHeight = paletteRows > 0 ? paletteRows + POPUP_BORDER_ROWS : 0
@@ -651,22 +661,21 @@ function pickerPane(snapshot: Snapshot, geometry: Layout): string[] {
 
   const out = [...head, ...visible]
   while (out.length < height - 1) out.push('')
-  const action = picker.kind === 'models' || picker.kind === 'themes'
+  const action = picker.kind === 'models' || picker.kind === 'themes' ||
+    picker.kind === 'login' || picker.kind === 'login-method'
     ? 'select'
     : picker.kind === 'plugins'
       ? 'enable or disable'
       : picker.kind === 'delete' ? 'delete' : 'open'
+  // The open-sessions list is the only one a key can act on beyond selecting
+  // a row: "x" closes the session under the cursor without leaving the list.
+  const keys = picker.kind === 'open'
+    ? `↑↓ move  ·  enter ${action}  ·  x close  ·  esc back`
+    : `↑↓ move  ·  enter ${action}  ·  esc back`
   const count = `${matches.length}/${picker.items.length}`
   out.push(
-    muted(`↑↓ move  ·  enter ${action}  ·  esc back`) +
-      ' '.repeat(
-        Math.max(
-          width -
-            displayWidth(`↑↓ move  ·  enter ${action}  ·  esc back`) -
-            displayWidth(count),
-          1,
-        ),
-      ) +
+    muted(keys) +
+      ' '.repeat(Math.max(width - displayWidth(keys) - displayWidth(count), 1)) +
       muted(count),
   )
   return out.slice(0, height)
@@ -996,9 +1005,11 @@ function fleetPane(snapshot: Snapshot, geometry: Layout): string[] {
   }
 
   const current = fleet.sessions[fleet.selected]
-  // Only a local session can be opened in place; a remote one is reached over
-  // SSH, so the hint promises to copy the command rather than to open it.
-  const action = current === undefined ? 'open' : current.local ? 'enter open' : 'enter copy ssh'
+  // A local session switches in place; a remote one is attached to over SSH,
+  // handing the terminal over for the duration — both read "open" here, and
+  // it is only where a real terminal is not attached on both ends that this
+  // falls back to copying the command instead.
+  const action = current === undefined ? 'open' : 'enter open'
   const hint = `↑↓ move  ·  ${action}  ·  a add  ·  x remove  ·  r refresh  ·  esc back`
   const count = fleet.loading ? 'refreshing…' : `${String(fleet.sessions.length)} sessions`
   const pad = Math.max(width - displayWidth(hint) - displayWidth(count), 1)

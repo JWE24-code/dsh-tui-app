@@ -27,6 +27,8 @@ export interface TuiStartupValues {
     mouse: boolean;
     /** Ring the bell when a session's turn finishes; on by default. */
     bell: boolean;
+    /** Modal vim editing for the composer; off by default. */
+    vim: boolean;
     /** Bring back the sessions that were open at the last exit; on by default. */
     restore: boolean;
     /** Devices to include in the fleet overview; empty means this one only. */

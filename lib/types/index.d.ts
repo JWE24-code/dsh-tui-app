@@ -25,6 +25,8 @@ export interface Config {
     mouse?: boolean;
     /** Ring the terminal bell when a session's turn finishes; on by default. */
     bell?: boolean;
+    /** Modal vim editing for the composer; off by default. */
+    vim?: boolean;
     /**
      * Devices to include in the fleet overview, as anything `ssh` accepts.
      * Empty means the overview shows only this machine.
