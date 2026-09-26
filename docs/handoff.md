@@ -259,9 +259,10 @@ published contract covers: it was taken from two independent reverse-engineered
 trackers that agree ([OpenUsage's notes](https://github.com/PowerUserZ/OpenTokenUsage/blob/main/docs/providers/codex.md)
 and headroom's `codex_rate_limits.py`), not from a live response — no Codex
 sign-in exists on this machine, so the parser's happy path is tested against
-the documented schema and only the unsigned path has been live-verified. Give
-it a real sign-in via `/providers` and check `/usage` before trusting the
-numbers. Two facts learned doing it: the live `limits[]` row for the weekly
+the documented schema and only the unsigned path has been live-verified. The
+user expects to have a Codex plan around a week after 2026-09-26: sign in via
+`/providers` then, run `/usage`, and check the block against the Codex CLI's
+own status line before trusting the numbers. Two facts learned doing it: the live `limits[]` row for the weekly
 window arrives `is_active: false` while describing the week that is drawn (so
 the parser ignores that flag), and the agent-harness sandbox exports
 `NO_COLOR=1` and `TERM=dumb`, which the app honours — start the tmux pane with
