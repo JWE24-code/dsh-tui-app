@@ -261,14 +261,18 @@ truncated to what the terminal is willing to accept.
 
 Two channels are used, because neither is sufficient alone. The OSC 52 escape
 is the one a terminal owns: no dependency, no external process, and it is what
-survives SSH and tmux, where nothing running locally can reach the clipboard
-you are actually looking at. But a Wayland compositor grants clipboard
-ownership only against an input-focus serial, so a terminal can accept a
-perfectly well-formed escape and still leave the selection untouched — the copy
-reports success and nothing is on the clipboard. So when a local helper is
-present (`wl-copy`, `xclip`, `xsel`, `pbcopy`) the text goes there too, and
-that is the one that lands on a desktop. A missing helper is not an error; it
-just leaves OSC 52 to do the job it is good at.
+survives SSH, where nothing running locally can reach the clipboard you are
+actually looking at. Inside tmux or GNU screen the escape is wrapped in that
+multiplexer's own passthrough syntax first — a bare OSC 52 does not reach the
+real terminal through either one on its own, since tmux drops it unless
+`allow-passthrough` happens to be set and screen only ever relays a DCS string
+it recognizes as its own. But a Wayland compositor grants clipboard ownership
+only against an input-focus serial, so a terminal can accept a perfectly
+well-formed escape and still leave the selection untouched — the copy reports
+success and nothing is on the clipboard. So when a local helper is present
+(`wl-copy`, `xclip`, `xsel`, `pbcopy`) the text goes there too, and that is the
+one that lands on a desktop. A missing helper is not an error; it just leaves
+OSC 52 to do the job it is good at.
 
 ## Dictating with your voice
 
@@ -791,6 +795,7 @@ src/
     stream.ts      projects assistant-stream chunks onto the transcript
     export.ts      transcript to markdown for /export
     usage-view.ts  the /usage dashboard: colored bars, drawn from usage.ts's data
+    osc52.ts       the clipboard escape, wrapped for tmux/screen when one is in the middle
     markdown.ts    markdown to ANSI plus a small syntax highlighter
     text.ts        ANSI-aware width, wrap, truncate
     theme.ts       adaptive palette and SGR styling
@@ -867,7 +872,7 @@ regression still would.
     provider parses the real command line.
   - `dsh --profile tui </dev/null` boots the bundle and exits on the non-TTY
     guard.
-- **32 suites, 1595 assertions**, covering rendering (including a pty round
+- **33 suites, 1616 assertions**, covering rendering (including a pty round
   trip through the real screen, decoder, and frame renderer), streaming
   projection, queueing, steering, persistence, the usage ledger and its
   colored dashboard, session storage, cross-session search, the panels

@@ -86,6 +86,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   leaving only a bare exit code in the status line. A non-zero exit now opens
   an overlay with the exact command to run outside this app instead, where
   nothing clears its output away mid-read.
+- **A copy could silently fail to reach the terminal inside tmux or GNU
+  screen.** The OSC 52 clipboard escape was always written raw, but neither
+  multiplexer forwards an embedded escape sequence to the real terminal on
+  its own — tmux drops it unless `allow-passthrough` happens to be set, not
+  the default before tmux 3.3, and screen only ever relays a DCS string it
+  recognizes as its own. The escape is now wrapped in whichever
+  multiplexer's own passthrough syntax applies (`Ptmux;` for tmux, with every
+  embedded ESC doubled; a chunked bare DCS for screen, whose own strings cap
+  at 768 bytes) before it reaches the terminal, live-verified inside a real
+  tmux session.
 
 ### Changed
 

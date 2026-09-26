@@ -151,6 +151,7 @@ import {
   mergeFleet,
   type FleetSession,
 } from './tui/fleet.ts'
+import { buildOsc52, wrapForMultiplexer } from './tui/osc52.ts'
 import { PresencePublisher, type PresenceInput } from './presence.ts'
 import { collectFleet, localDshHome, type PeerConfig } from './fleet-sources.ts'
 import {
@@ -2910,24 +2911,21 @@ class TuiApp {
    * payload ceiling are the same problem in both places.
    */
   private writeClipboard(text: string): { ok: boolean; truncated: boolean; error?: string } {
-    const encoded = Buffer.from(text, 'utf8').toString('base64')
-    // Cap the payload on the encoded form, kept a multiple of four so it stays
-    // decodable; slicing the content instead would split a surrogate pair and
-    // still overshoot the ceiling by base64's 33% expansion.
-    const cap = 100_000 - (100_000 % 4)
-    const clipped = encoded.length <= cap ? encoded : encoded.slice(0, cap)
+    const { sequence, truncated } = buildOsc52(text)
     try {
-      // `ESC ] 52 ; c ; <base64> ST` — the standard form every mainstream
-      // terminal accepts. Written directly, then the next paint redraws.
-      process.stdout.write(`\u001b]52;c;${clipped}\u001b\\`)
-      // OSC 52 is the only channel that survives SSH and tmux, so it is always
-      // written. It is not sufficient on its own: a Wayland compositor only
-      // lets a window own the clipboard while it holds an input-focus serial,
-      // so the escape can be well-formed, accepted by the terminal, and still
-      // leave the clipboard untouched. Where a local helper exists it is what
-      // actually lands, so it is used as well — same text, last writer wins.
+      // Written directly, then the next paint redraws.
+      process.stdout.write(wrapForMultiplexer(sequence, process.env))
+      // OSC 52 is the only channel that survives SSH, so it is always
+      // written — wrapped for tmux or GNU screen when one is in the middle,
+      // since neither forwards an embedded escape sequence to the real
+      // terminal on its own. It is not sufficient by itself even then: a
+      // Wayland compositor only lets a window own the clipboard while it
+      // holds an input-focus serial, so the escape can be well-formed,
+      // accepted by the terminal, and still leave the clipboard untouched.
+      // Where a local helper exists it is what actually lands, so it is used
+      // as well — same text, last writer wins.
       copyWithLocalHelper(text)
-      return { ok: true, truncated: encoded.length > cap }
+      return { ok: true, truncated }
     } catch (error) {
       return { ok: false, truncated: false, error: describeError(error) }
     }
