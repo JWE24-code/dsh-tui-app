@@ -8,6 +8,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Fifteen new color palettes.** `/theme` now offers twenty palettes where it
+  offered five, spanning the styles the original set did not: pastels
+  (Catppuccin), vivid neon (Dracula, Monokai, Synthwave), cool blues
+  (Tokyo Night), organic greens (Everforest), editor classics (One, Material,
+  Tomorrow), ink wash (Kanagawa), warm neutrals (Ayu), minimal paper, the
+  green CRT (Phosphor), and two more accessibility corners alongside `mono` —
+  `modus`, a pair built to published WCAG contrast guarantees, and
+  `contrast`, saturated hues on a pure base. Published palettes use their own
+  light and dark variants as published; where none exists (Dracula, Monokai,
+  Nord) a light variant is derived from the palette's hues, as Nord's already
+  was. `paper`, `phosphor`, `synthwave`, and `contrast` are this app's own.
 - **A plan probe for OpenAI Codex (ChatGPT).** The route has had a sign-in
   since `/providers` landed but reported nothing in `/usage`; it now shows the
   ChatGPT plan's tier, its 5-hour and weekly utilization, and any remaining

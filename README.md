@@ -560,9 +560,24 @@ switches straight away.
 | Theme | |
 |---|---|
 | `rose-pine` | the default — muted purples on a soft ink background |
+| `ayu` | warm neutrals, orange accent |
+| `catppuccin` | soft pastels, easy on the eyes (Latte / Mocha) |
+| `contrast` | saturated hues on pure black/white; maximum legibility |
+| `dracula` | vivid neon on purple; dark canonical, light derived |
+| `everforest` | muted organic greens, low glare |
 | `gruvbox` | warm retro earth tones, medium contrast |
+| `kanagawa` | sumi-e ink wash; wave dark, lotus light |
+| `material` | Android's palette; Darker dark, Lighter light |
+| `modus` | WCAG-contrast-checked pair; Operandi light, Vivendi dark |
+| `monokai` | the classic vivid editor scheme; dark canonical |
 | `nord` | cool arctic blues, low saturation |
+| `one` | Atom's classic; One Light and One Dark |
+| `paper` | a page and one red accent; ink dark twin |
+| `phosphor` | green CRT glow; amber for warnings |
 | `solarized` | Schoonover's balanced pairing |
+| `synthwave` | hot pink on indigo; the outrun sunset |
+| `tokyo-night` | city-night blues; Night dark, Day light |
+| `tomorrow` | muted neutrals; hue as seasoning |
 | `mono` | greyscale, maximum contrast, no color coding at all |
 
 Every palette defines both a light and a dark variant, because *which* palette
@@ -576,6 +591,16 @@ to do and picking one changes nothing.
 keep them, so success and failure no longer differ by color. Nothing in the
 app relies on color alone — a failed tool call prints `✗` and its error text
 either way — so what is left is legible where a hue-based palette is not.
+`contrast` is the other accessibility corner: it keeps the hues but pushes
+each to a saturated extreme against a pure base, and `modus` is the
+middle path — a pair built to published WCAG contrast guarantees.
+
+Where a palette publishes both variants, both are used as published (the
+exceptions are documented in the table: Dracula, Monokai, and Nord have no
+light variant of their own, so one is derived from their hues the same way);
+`paper`, `phosphor`, `synthwave`, and `contrast` are this app's own, built for
+styles no published palette covers — minimal paper, the green CRT, the outrun
+sunset, and maximum-contrast color.
 
 The choice is saved with the rest of the durable state and applied before the
 first frame, so it survives a restart. Switching repaints the whole screen at
@@ -969,7 +994,7 @@ regression still would.
     provider parses the real command line.
   - `dsh --profile tui </dev/null` boots the bundle and exits on the non-TTY
     guard.
-- **34 suites, 1809 assertions**, covering rendering (including a pty round
+- **34 suites, 2634 assertions**, covering rendering (including a pty round
   trip through the real screen, decoder, and frame renderer), streaming
   projection, queueing, steering, persistence, the usage ledger and its
   colored dashboard, session storage, cross-session search, the panels
