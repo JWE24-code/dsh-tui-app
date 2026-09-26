@@ -8,6 +8,34 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A first-run setup list.** A fresh install opens with the four questions
+  every new user has — interface language, color palette, provider sign-in,
+  voice setup — as a list whose rows open the pickers that answer them.
+  Closing it records that the machine has seen it; it never returns unasked.
+- **Live preview in the pickers.** Moving through `/theme` repaints the whole
+  app in the highlighted palette, and `/lang` re-renders the chrome in the
+  highlighted language; `esc` restores what was in force and `enter` keeps
+  what you landed on. Browsing by arrow key is trying it on.
+- **Tab completion for command arguments.** `/theme <par<Tab>` completes a
+  palette name (shared prefix first, then the picker), and `/lang <Tab>` does
+  the same for languages. Completion and browsing end in the same place.
+- **Mouse on by default.** The wheel scrolls the transcript and a click on a
+  tab in the session bar switches to it. Text selection needs shift while
+  reporting is on (the app's own `alt+c`/`ctrl+y` copy needs nothing);
+  `--no-mouse` restores plain-drag selection. Shift+click is deliberately
+  passed to the terminal rather than treated as an app click.
+- **The bell covers everything you stopped waiting for.** A background job
+  that finishes rings with a status line naming it, as does a fleet dispatch
+  returning from a peer — not only session turns. Jobs are announced on the
+  observed running-to-finished transition, so jobs that were already done
+  when the app started stay quiet.
+
+### Fixed
+
+- **The interface language no longer resets on restart.** `lang` was written
+  on every save but never read back, so a chosen language lasted exactly as
+  long as the process did.
+
 - **`moqi`, the app's own palette, and the new default.** A Chinese ink
   painting, which is where the name comes from (墨气): Deep Ink ground, Xuan
   Paper text, Ink Wash selection and borders, Slate Smoke muted layer, with

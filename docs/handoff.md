@@ -75,7 +75,7 @@ Every feature or fix updates, in the same commit:
 - a test suite, registered in `package.json`'s `test` script (the offline-import
   walker reads that script, so an unregistered suite is also an unchecked one).
 
-The README quotes a suite/assertion total (currently **34 suites, 2697
+The README quotes a suite/assertion total (currently **34 suites, 2722
 assertions**). Recompute and update it:
 
 ```bash

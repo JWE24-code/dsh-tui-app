@@ -44,6 +44,8 @@ export interface PersistedState {
   theme?: string
   /** Interface language: `en` or `zh-CN`. */
   lang?: string
+  /** Whether the first-run setup list has been seen; it returns until it has. */
+  setupDone?: boolean
   /**
    * Whether tool calls were listed rather than summarized when the app last
    * ran; absent means the default, which is to list them.
@@ -233,11 +235,53 @@ export function decodeState(raw: string): PersistedState {
       ? parsed.peers.filter((entry): entry is string => typeof entry === 'string')
       : [],
     theme: typeof parsed.theme === 'string' ? parsed.theme : undefined,
+    // `lang` is written on every save but was never read back here, which
+    // quietly reset the interface to English on every restart — the choice
+    // only lasted as long as the process did.
+    lang: typeof parsed.lang === 'string' ? parsed.lang : undefined,
+    setupDone: parsed.setupDone === true ? true : undefined,
     expandTools: parsed.expandTools === false ? false : undefined,
     sessions,
     activeSession,
     usage: readUsage(parsed.usage),
     usageEntries: readUsageEntries(parsed.usageEntries),
+  }
+}
+
+/**
+ * Assemble the state to write, from the live values the app holds.
+ *
+ * The field list lives here rather than inline in the app because listing it
+ * by hand is exactly how fields get lost: `persistNow` used to rebuild the
+ * object itself, and every field it forgot — `lang` and `setupDone` were both
+ * dropped this way — was written as absent on every save no matter what the
+ * app had set. One list, in one place, exercised by a test.
+ */
+export function assembleState(input: {
+  inputHistory: string[]
+  thinking: boolean
+  theme: string
+  lang: string
+  setupDone: boolean | undefined
+  expandTools: boolean | undefined
+  peers: string[]
+  sessions: PersistedSession[]
+  activeSession: number
+  usage: UsageLedger
+  usageEntries: UsageEntry[]
+}): PersistedState {
+  return {
+    inputHistory: input.inputHistory,
+    thinking: input.thinking,
+    theme: input.theme,
+    lang: input.lang,
+    setupDone: input.setupDone,
+    expandTools: input.expandTools,
+    peers: input.peers,
+    sessions: input.sessions,
+    activeSession: input.activeSession,
+    usage: input.usage,
+    usageEntries: input.usageEntries,
   }
 }
 

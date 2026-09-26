@@ -101,6 +101,7 @@ import {
   layout,
   maxScrollBack,
   render,
+  tabClickTarget,
   type Snapshot,
   type VoicePhase,
 } from './tui/view.ts'
@@ -124,6 +125,7 @@ import {
   writeProfileManifest,
 } from './plugins.ts'
 import {
+  assembleState,
   loadState,
   MAX_RESTORED_SESSIONS,
   restorePlan,
@@ -528,6 +530,14 @@ class TuiApp {
   private readonly usageView = new UsageView()
   /** The last provider-plan reading, reused briefly so reopens do not re-probe. */
   private readonly planCache = new PlanCache()
+  /** What was in force before the themes picker opened a preview, restored on esc. */
+  private previewBaseTheme: string | undefined
+  /** What was in force before the language picker opened a preview, restored on esc. */
+  private previewBaseLang: Lang | undefined
+  /** Last-seen status of each background job, so a finish is observed as a transition. */
+  private jobStatus = new Map<string, string>()
+  /** The background-job watcher's interval. */
+  private jobsTimer: NodeJS.Timeout | undefined
 
   /** The cross-device overview, and what this device publishes to it. */
   private readonly fleet = new FleetView()
@@ -582,7 +592,7 @@ class TuiApp {
       onResize: () => {
         this.paint()
       },
-    }, { mouse: config.mouse === true })
+    }, { mouse: config.mouse !== false })
   }
 
   /** Boot the app: resolve the agent, open the screen, and paint. */
@@ -665,6 +675,12 @@ class TuiApp {
     this.screen.start()
     this.installSignalHandlers()
     this.registerTrustSurfaces()
+    // Five seconds is often enough to notice a finished job without the
+    // watcher itself ever being felt; the interval is unref'd so a wart on
+    // this timer can never keep the process alive at quit.
+    this.jobsTimer = setInterval(() => this.watchJobs(), 5000)
+    this.jobsTimer.unref?.()
+    if (this.persisted.setupDone !== true) this.showSetupWizard()
     this.paint()
   }
 
@@ -1068,6 +1084,10 @@ class TuiApp {
     if (this.stopped) return
     this.stopped = true
     this.stopSpinner()
+    if (this.jobsTimer !== undefined) {
+      clearInterval(this.jobsTimer)
+      this.jobsTimer = undefined
+    }
     // A recorder left running would keep the microphone open after the app
     // it belonged to is gone, with nothing on screen to say so.
     if (this.voiceRecording !== undefined) this.cancelVoice()
@@ -1472,6 +1492,9 @@ class TuiApp {
     if (this.stopped) return
     // Paint is the one funnel every state change already goes through, and
     // publishPresence is a no-op unless the published set actually changed.
+    // It is also the one funnel every picker change reaches, which is what
+    // makes it the right place to keep a picker's live preview honest.
+    this.syncPickerPreview()
     this.publishPresence()
     const frame = render(this.snapshot())
     this.screen.setCursor(frame.cursor)
@@ -2181,6 +2204,9 @@ class TuiApp {
         })
       })
     })
+    // A dispatch outlives attention the same way a background job does, so
+    // its arrival gets the same bell a finished turn gets.
+    this.ring()
     const body = result.out === '' ? '(no output)' : result.out.slice(-8000)
     this.showOverlay(
       `**${device}** · \`${profile}\`\n\n${body}`,
@@ -2379,6 +2405,7 @@ class TuiApp {
         this.requestQuit()
         return
       case 'esc':
+        if (this.picker.kind === 'setup') this.finishSetup()
         this.picker.hide()
         break
       case 'up':
@@ -2440,6 +2467,13 @@ class TuiApp {
         else if (kind === 'rewind') void this.performRewind(Number.parseInt(item.id, 10))
         else if (kind === 'stored') void this.openStoredHit(item)
         else if (kind === 'lang') this.selectLanguage(isLang(item.id) ? item.id : 'en')
+        else if (kind === 'setup') {
+          if (item.id === 'lang') void this.runCommand('lang', '')
+          else if (item.id === 'theme') this.showThemes()
+          else if (item.id === 'login') void this.runCommand('providers', '')
+          else if (item.id === 'voice') this.setStatus('run: npm run setup-voice — then ctrl+v in the app')
+          else this.finishSetup()
+        }
         else if (kind === 'login') this.chooseLoginEntry(item.id)
         else if (kind === 'login-method') this.beginLoginWithMethod(item.id)
         else void this.openSession(item.id, item.title)
@@ -2555,6 +2589,10 @@ class TuiApp {
         const chosen = this.palette.current()
         if (this.atMenu.open) {
           this.acceptAtCompletion()
+          break
+        }
+        if (chosen === undefined && this.completeCommandArgument()) {
+          this.paint()
           break
         }
         if (chosen !== undefined) {
@@ -2711,6 +2749,18 @@ class TuiApp {
       case 'ctrl+g':
         this.scrollToBottom()
         break
+      case 'click': {
+        // The tab bar is the one region whose contents have stable, meaningful
+        // extents; a click anywhere else is ignored rather than guessed at.
+        // Its row comes from the layout, not from an assumption: the header
+        // above it is conditional, so the bar moves.
+        const cell = key.mouse
+        if (cell === undefined) break
+        const index = tabClickTarget(this.snapshot(), cell)
+        if (index !== undefined) this.selectSession(index)
+        break
+      }
+
       case 'wheelup':
         this.scroll(-3)
         break
@@ -2942,17 +2992,19 @@ class TuiApp {
 
   /** Write the durable state immediately, ignoring a failing backend. */
   private persistNow(): void {
-    this.persisted = {
+    this.persisted = assembleState({
       inputHistory: [...this.history.snapshot()],
       thinking: this.showThinking,
       theme: activeTheme(),
+      lang: currentLanguage(),
+      setupDone: this.persisted.setupDone,
       expandTools: this.expandTools,
       peers: this.peers,
       sessions: this.openSessions(),
       activeSession: this.activeSessionIndex(),
       usage: this.usageLedger,
       usageEntries: this.usageEntries,
-    }
+    })
     // Synchronous on purpose: this runs on the quit path, where an async write
     // would be abandoned the moment `exit(0)` tears the process down.
     saveStateSync(this.persisted)
@@ -3641,6 +3693,8 @@ class TuiApp {
       case 'lang': {
         const wanted = rawInput.trim()
         if (wanted === '') {
+          // The base a cancelled preview returns to; see syncPickerPreview.
+          this.previewBaseLang = currentLanguage()
           this.picker.show(
             'lang',
             'Language',
@@ -4098,6 +4152,8 @@ class TuiApp {
 
   /** Switch the interface language and remember it across restarts. */
   private selectLanguage(lang: Lang): void {
+    // Committing a language is the one preview exit that must not restore.
+    this.previewBaseLang = undefined
     setLanguage(lang)
     this.persisted.lang = lang
     this.persistSoon()
@@ -4237,6 +4293,141 @@ class TuiApp {
       names = []
     }
     this.showOverlay(renderMcp(groupMcpTools(names), names.length), 'esc to close')
+  }
+
+  /**
+   * Keep the pickers that preview on highlight in step with the screen.
+   *
+   * The themes picker repaints the whole app in the highlighted palette as
+   * the cursor moves — browsing 21 palettes by arrow key is the whole point
+   * of having them — and the language picker re-renders the chrome in the
+   * highlighted language for the same reason. Both are previews, not
+   * choices: nothing persists, per-tab bookkeeping is untouched, and leaving
+   * the picker without committing restores what was in force before it
+   * opened. A commit clears the base itself, so the restore here can be
+   * unconditional.
+   */
+  private syncPickerPreview(): void {
+    if (this.picker.kind === 'themes') {
+      const item = this.picker.current()
+      if (item !== undefined && item.id !== activeTheme()) {
+        applyTheme(item.id)
+        this.screen.invalidate()
+      }
+      return
+    }
+    if (this.picker.kind === 'lang') {
+      const item = this.picker.current()
+      if (item !== undefined && isLang(item.id) && item.id !== currentLanguage()) {
+        setLanguage(item.id)
+        this.screen.invalidate()
+      }
+      return
+    }
+    if (this.previewBaseTheme !== undefined) {
+      if (activeTheme() !== this.previewBaseTheme) {
+        applyTheme(this.previewBaseTheme)
+        this.screen.invalidate()
+      }
+      this.previewBaseTheme = undefined
+    }
+    if (this.previewBaseLang !== undefined) {
+      if (currentLanguage() !== this.previewBaseLang) setLanguage(this.previewBaseLang)
+      this.previewBaseLang = undefined
+    }
+  }
+
+  /**
+   * Tab completion for the arguments of the commands whose values the app
+   * already enumerates: `/theme <tab>`, `/lang <tab>`.
+   *
+   * An unambiguous match completes in place; an ambiguous one extends to the
+   * shared prefix and then, pressed again, opens the picker the command
+   * itself opens — completion and browsing should end in the same place.
+   * Returns whether the tab was consumed, so the ordinary meanings of the
+   * key are untouched for every other input.
+   */
+  private completeCommandArgument(): boolean {
+    const text = this.composer.value()
+    if (!text.startsWith('/') || text.includes('\n')) return false
+    const space = text.indexOf(' ')
+    if (space === -1) return false
+    const command = text.slice(1, space)
+    const argument = text.slice(space + 1)
+    if (argument.includes(' ')) return false
+    let candidates: readonly string[] = []
+    let open: (() => void) | undefined
+    if (command === 'theme') {
+      candidates = listThemes().map((theme) => theme.name)
+      open = () => this.showThemes()
+    } else if (command === 'lang') {
+      candidates = LANGS.map((entry) => entry.id)
+      open = () => void this.runCommand('lang', '')
+    } else {
+      return false
+    }
+    const matches = candidates.filter((name) => name.startsWith(argument))
+    if (matches.length === 1 && matches[0] !== argument) {
+      this.composer.setValue(`/${command} ${String(matches[0])} `)
+      this.setStatus('')
+      return true
+    }
+    if (matches.length > 1) {
+      const prefix = matches.reduce((shared, name) => {
+        let end = 0
+        while (end < shared.length && end < name.length && shared[end] === name[end]) end += 1
+        return shared.slice(0, end)
+      })
+      if (prefix.length > argument.length) {
+        this.composer.setValue(`/${command} ${prefix}`)
+        return true
+      }
+      open?.()
+      return true
+    }
+    if (matches.length === 0) {
+      this.setStatus(`no ${command === 'theme' ? 'palette' : 'language'} starts with ${argument}`)
+    }
+    return matches.length !== 0
+  }
+
+  /**
+   * Watch the background-job registry and announce finishes.
+   *
+   * A job outliving the user's attention is the normal case — that is what
+   * running it in the background means — so the app says so with the same
+   * bell a finished turn uses, plus a status line, the moment a job that was
+   * running is seen finished. Only observed transitions announce: a job that
+   * was already finished when the app started (or that this profile's
+   * registry lists without ever having run) stays quiet.
+   */
+  private watchJobs(): void {
+    const registry = this.ctx.get('jobs') as JobRegistryLike | undefined
+    if (registry === undefined) return
+    let jobs: { id: unknown; status: unknown; label: unknown }[]
+    try {
+      jobs = registry.list(this.tab.agent)
+    } catch {
+      return
+    }
+    for (const job of jobs) {
+      if (typeof job.status !== 'string') continue
+      const id = String(job.id)
+      const previous = this.jobStatus.get(id)
+      if (job.status === 'running') {
+        this.jobStatus.set(id, 'running')
+        continue
+      }
+      if (previous === 'running') {
+        this.jobStatus.set(id, job.status)
+        const label = typeof job.label === 'string' ? job.label : ''
+        this.ring()
+        this.setStatus(`background job ${label === '' ? id : label} finished`)
+        this.paint()
+      } else if (previous === undefined) {
+        this.jobStatus.set(id, job.status)
+      }
+    }
   }
 
   /**
@@ -4436,11 +4627,52 @@ class TuiApp {
   }
 
   /**
+   * The first-run setup list, shown once on a fresh install.
+   *
+   * A new user's questions are all of the same shape — which language, which
+   * palette, how do I sign in — and before this existed each answer lived
+   * behind a different command the newcomer had not read about yet. The list
+   * is therefore just doors into the pickers that already answer them, plus
+   * the one setup step that is a shell command. It appears only until it is
+   * dismissed: `enter` on the last row or `esc` records that this machine has
+   * seen it, and it never comes back unasked.
+   */
+  private showSetupWizard(): void {
+    const rows: PickerItem[] = [
+      {
+        id: 'lang',
+        title: 'Interface language',
+        subtitle: LANGS.find((entry) => entry.id === currentLanguage())?.label ?? 'English',
+      },
+      {
+        id: 'theme',
+        title: 'Color palette',
+        subtitle: activeTheme(),
+      },
+      { id: 'login', title: 'Sign in to a provider', subtitle: 'Claude, ChatGPT — /providers' },
+      { id: 'voice', title: 'Set up voice control', subtitle: 'npm run setup-voice' },
+      { id: 'done', title: 'Done', subtitle: 'close this list; it will not return' },
+    ]
+    this.picker.show('setup', 'Set Moqi up', rows)
+    this.setStatus('enter opens a step · esc closes this list for good')
+    this.paint()
+  }
+
+  /** Record that the setup list has been seen and must not return unasked. */
+  private finishSetup(): void {
+    if (this.persisted.setupDone === true) return
+    this.persisted.setupDone = true
+    this.persistSoon()
+  }
+
+  /**
    * Open the palette picker. The rows come straight from the theme table, so
    * a palette added there shows up here with no further wiring.
    */
   private showThemes(): void {
     const current = activeTheme()
+    // The base a cancelled preview returns to; see syncPickerPreview.
+    this.previewBaseTheme = current
     const rows: PickerItem[] = listThemes().map((theme) => ({
       id: theme.name,
       title: theme.name,
@@ -4463,6 +4695,8 @@ class TuiApp {
    * something else happens to touch those rows.
    */
   private selectTheme(name: string): void {
+    // Committing a palette is the one preview exit that must not restore.
+    this.previewBaseTheme = undefined
     if (!applyTheme(name)) {
       this.setStatus(`unknown theme ${name} — /theme lists them`, true)
       this.paint()

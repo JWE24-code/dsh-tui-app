@@ -21,6 +21,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 
 import {
+  assembleState,
   decodeState,
   loadState,
   MAX_RESTORED_SESSIONS,
@@ -400,4 +401,43 @@ try {
 }
 
 // eslint-disable-next-line no-console
+
+// ------------------------------------------------- language & setup flag
+
+// `lang` was written on every save but never read back, quietly resetting the
+// interface to English on every restart; `setupDone` keeps the first-run list
+// from nagging. Both must survive a save/decode round trip.
+{
+  const blank: PersistedState = {
+    inputHistory: [],
+    thinking: false,
+    peers: [],
+    sessions: [],
+    activeSession: 0,
+    usage: {},
+    usageEntries: [],
+  }
+  // Assemble the way the app does, rather than hand-building the object:
+  // the fields were being dropped by the app's own assembly, which a test
+  // that constructs its own input could never have caught.
+  const chosen = assembleState({
+    inputHistory: [],
+    thinking: false,
+    theme: 'moqi',
+    lang: 'zh-CN',
+    setupDone: true,
+    expandTools: undefined,
+    peers: [],
+    sessions: [],
+    activeSession: 0,
+    usage: {},
+    usageEntries: [],
+  })
+  const restored = decodeState(JSON.stringify({ ...chosen, version: VERSION }))
+  check('the language survives a round trip', restored.lang === 'zh-CN')
+  check('the setup-done flag survives a round trip', restored.setupDone === true)
+  const fresh = decodeState(JSON.stringify({ ...blank, version: VERSION }))
+  check('neither field appears when never set', fresh.lang === undefined && fresh.setupDone === undefined)
+}
+
 console.log(`ok - ${String(checks)} checks passed`)

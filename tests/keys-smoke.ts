@@ -102,4 +102,28 @@ check('alt+char decodes', decode('\x1bj').keys[0]?.name === 'alt+j')
   check('dispose cancels a pending escape', emitted.length === 0)
 }
 
+// ------------------------------------------------------------- mouse reports
+
+// SGR reports: ESC [ < button ; column ; row M (press) / m (release), with
+// column and row 1-indexed on the screen.
+check('a left-click press decodes with its cell', (() => {
+  const key = decode('\x1b[<0;12;1M').keys[0]
+  return key?.name === 'click' && key?.mouse?.column === 11 && key?.mouse?.row === 0
+})())
+check('a wheel-up report keeps its cell', (() => {
+  const key = decode('\x1b[<64;5;3M').keys[0]
+  return key?.name === 'wheelup' && key?.mouse?.column === 4 && key?.mouse?.row === 2
+})())
+check('a wheel-down report keeps its cell', (() => {
+  const key = decode('\x1b[<65;1;9M').keys[0]
+  return key?.name === 'wheeldown' && key?.mouse?.row === 8
+})())
+check('a release decodes to nothing', decode('\x1b[<0;12;1m').keys.length === 0)
+check('shift+click is left alone for the terminal to select', decode('\x1b[<4;12;1M').keys.length === 0)
+check('a right-click does not reach the app', decode('\x1b[<2;12;1M').keys.length === 0)
+check('a mouse report followed by a key decodes both', (() => {
+  const out = decode('\x1b[<0;3;2Ma')
+  return out.keys[0]?.name === 'click' && out.keys[1]?.text === 'a'
+})())
+
 console.log(`ok - ${String(checks)} key-decoder checks passed`)

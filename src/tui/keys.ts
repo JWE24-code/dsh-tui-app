@@ -14,6 +14,13 @@ export interface Key {
   name: string
   /** Printable text this key contributes, if any. */
   text: string
+  /**
+   * Screen cell a mouse event landed on, 0-indexed. Present only on the keys
+   * a mouse produces (`click`, `wheelup`, `wheeldown`) — a click is useless
+   * without its target, and the wheel carries one so a later region-aware
+   * wheel needs no second parser.
+   */
+  mouse?: { column: number; row: number }
 }
 
 const ESC = ''
@@ -74,8 +81,12 @@ export function decode(input: string): { keys: Key[]; rest: string } {
       if (rest.length === 1) return { keys, rest }
 
       // SGR mouse report: ESC [ < button ; column ; row (M press | m release).
-      // Only the wheel is acted on; other buttons are swallowed so a click
-      // cannot leak into the composer as stray text.
+      // A left-click press and the wheel are acted on; every other report is
+      // swallowed so a click cannot leak into the composer as stray text.
+      // Reports with modifier bits set are ignored rather than unmasked:
+      // shift+click is how a terminal makes its own text selection while
+      // reporting is on, and treating that workaround as an app click would
+      // make copying impossible.
       if (rest.startsWith(`${ESC}[<`)) {
         const mouse = /^\[<(\d+);(\d+);(\d+)([Mm])/.exec(rest)
         if (mouse === null) {
@@ -84,9 +95,14 @@ export function decode(input: string): { keys: Key[]; rest: string } {
           continue
         }
         const button = Number.parseInt(mouse[1] ?? '0', 10)
+        const cell = {
+          column: Number.parseInt(mouse[2] ?? '1', 10) - 1,
+          row: Number.parseInt(mouse[3] ?? '1', 10) - 1,
+        }
         if (mouse[4] === 'M') {
-          if (button === 64) keys.push({ name: 'wheelup', text: '' })
-          else if (button === 65) keys.push({ name: 'wheeldown', text: '' })
+          if (button === 0) keys.push({ name: 'click', text: '', mouse: cell })
+          else if (button === 64) keys.push({ name: 'wheelup', text: '', mouse: cell })
+          else if (button === 65) keys.push({ name: 'wheeldown', text: '', mouse: cell })
         }
         index += mouse[0].length
         continue

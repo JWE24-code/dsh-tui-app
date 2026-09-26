@@ -36,6 +36,9 @@ import {
   maxScrollBack,
   render,
   type Snapshot,
+  sessionBarRow,
+  tabAtColumn,
+  tabClickTarget,
 } from '../src/tui/view.ts'
 import { normalizeSize } from '../src/tui/screen.ts'
 
@@ -619,10 +622,34 @@ const beyond = render({ ...tall, scrollBack: limit + 50 }).lines.map((line) => s
 check('the top of the transcript is reachable', atTop.some((line) => line.includes('line 0')))
 check('clamping is a no-op past the top', JSON.stringify(atTop) !== JSON.stringify(beyond) || true)
 
+// The tab-bar hit test must agree with the bar the renderer draws. A cell is
+// ' ' + mark(1) + ' ' + truncate('n title', 18) + ' ': three short titles make
+// cells of width 8 (a 5-wide label plus 3), separated by one column.
+{
+  const three = snapshot({
+    sessions: [
+      { id: 'a', title: 'one', status: 'idle', active: true },
+      { id: 'b', title: 'two', status: 'idle', active: false },
+      { id: 'c', title: 'three', status: 'idle', active: false },
+    ],
+  })
+  check('a click in the first tab selects it', tabAtColumn(three, 2) === 0)
+  check('a click in the second tab selects it', tabAtColumn(three, 10) === 1)
+  check('a click in the third tab selects it', tabAtColumn(three, 20) === 2)
+  check('a click on a separator selects nothing', tabAtColumn(three, 8) === undefined)
+  check('a click past the bar selects nothing', tabAtColumn(three, 200) === undefined)
+  check('the bar sits below the header and its blank line', sessionBarRow(three) === 2)
+  check('a click on the bar row reaches the tab under it', tabClickTarget(three, { column: 2, row: 2 }) === 0)
+  check('a click on the header row switches nothing', tabClickTarget(three, { column: 2, row: 0 }) === undefined)
+  check('a click on the bar row past the tabs switches nothing', tabClickTarget(three, { column: 60, row: 2 }) === undefined)
+  check('no bar means no row to click', sessionBarRow(snapshot({ sessions: [{ id: 'a', title: 'one', status: 'idle', active: true }] })) === undefined)
+  check('no bar is drawn with one session, so nothing is clickable', tabAtColumn(snapshot({ sessions: [{ id: 'a', title: 'one', status: 'idle', active: true }] }), 2) === undefined)
+}
+
 // Wheel events decode even though the mouse is opt-in.
 check('wheel up decodes', decode('[<64;10;5M').keys[0]?.name === 'wheelup')
 check('wheel down decodes', decode('[<65;10;5M').keys[0]?.name === 'wheeldown')
-check('a mouse click is swallowed', decode('[<0;10;5M').keys.length === 0)
+check('a mouse click decodes with its cell', (() => { const k = decode('[<0;10;5M').keys[0]; return k?.name === 'click' && k?.mouse?.column === 9 && k?.mouse?.row === 4 })())
 check('shift+up decodes', decode('[1;2A').keys[0]?.name === 'shift+up')
 check('shift+down decodes', decode('[1;2B').keys[0]?.name === 'shift+down')
 

@@ -137,6 +137,36 @@ export declare function maxScrollBack(snapshot: Snapshot): number;
  * line array the viewport slices, so a hit can be scrolled to directly.
  */
 export declare function findMatches(snapshot: Snapshot, query: string): number[];
+/**
+ * The screen row the session bar occupies, or `undefined` when it is not
+ * drawn. Clicks and the renderer must agree on where the bar is, and the
+ * header above it is conditional — so the position is computed from the same
+ * layout the frame is, never assumed to be the first row.
+ */
+export declare function sessionBarRow(snapshot: Snapshot): number | undefined;
+/**
+ * The tab a mouse click lands on, if any: the whole decision, pure.
+ *
+ * Keeping it here rather than in the app means the two halves that must
+ * agree — which row the bar is on, and which column inside it a tab covers —
+ * are exercised together, against the same layout the renderer uses.
+ */
+export declare function tabClickTarget(snapshot: Snapshot, cell: {
+    column: number;
+    row: number;
+}): number | undefined;
+/**
+ * Which session a click on the tab bar landed on, if any.
+ *
+ * The extents mirror {@link sessionBar}'s cell construction exactly — mark,
+ * space, label truncated to 18, and the wrapping spaces — because a hit test
+ * that drifts from the renderer sends clicks to the wrong tab, which is worse
+ * than no click support at all: it looks deliberate. Styled text measures the
+ * same as plain (the escapes carry no width), so the arithmetic runs on the
+ * unstyled shapes. Returns `undefined` for a click between tabs, on the
+ * overflow marker, or when the bar is not being drawn at all.
+ */
+export declare function tabAtColumn(snapshot: Snapshot, column: number): number | undefined;
 /** Build a full frame plus the cursor position for the screen to place. */
 export declare function render(snapshot: Snapshot): {
     lines: string[];

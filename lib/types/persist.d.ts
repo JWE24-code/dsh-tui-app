@@ -37,6 +37,8 @@ export interface PersistedState {
     theme?: string;
     /** Interface language: `en` or `zh-CN`. */
     lang?: string;
+    /** Whether the first-run setup list has been seen; it returns until it has. */
+    setupDone?: boolean;
     /**
      * Whether tool calls were listed rather than summarized when the app last
      * ran; absent means the default, which is to list them.
@@ -77,6 +79,28 @@ export declare function statePath(env?: NodeJS.ProcessEnv): string;
  * it cannot make sense of yields the fallback, which is always usable.
  */
 export declare function decodeState(raw: string): PersistedState;
+/**
+ * Assemble the state to write, from the live values the app holds.
+ *
+ * The field list lives here rather than inline in the app because listing it
+ * by hand is exactly how fields get lost: `persistNow` used to rebuild the
+ * object itself, and every field it forgot — `lang` and `setupDone` were both
+ * dropped this way — was written as absent on every save no matter what the
+ * app had set. One list, in one place, exercised by a test.
+ */
+export declare function assembleState(input: {
+    inputHistory: string[];
+    thinking: boolean;
+    theme: string;
+    lang: string;
+    setupDone: boolean | undefined;
+    expandTools: boolean | undefined;
+    peers: string[];
+    sessions: PersistedSession[];
+    activeSession: number;
+    usage: UsageLedger;
+    usageEntries: UsageEntry[];
+}): PersistedState;
 /**
  * Read the persisted state, returning the fallback when there is none or it
  * cannot be understood.

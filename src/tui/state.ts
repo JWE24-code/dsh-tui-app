@@ -185,6 +185,7 @@ export type PickerKind =
   | 'lang'
   | 'login'
   | 'login-method'
+  | 'setup'
   | 'none'
 
 /** One row in the picker. */

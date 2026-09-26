@@ -116,7 +116,7 @@ npm run typecheck
 | `--model <name>` | Model to select for this run |
 | `--thinking` | Start with reasoning output visible |
 | `--context-limit <n>` | Override the context budget; the default is the model's own capacity |
-| `--mouse` | Report mouse events so the wheel scrolls (costs terminal text selection) |
+| `--no-mouse` | Disable mouse reporting; the wheel scrolls and the tab bar clicks by default, and shift selects text for the terminal |
 | `--no-bell` | Stay silent when a session finishes |
 | `--vim` | Modal vim editing in the composer: `esc` for normal mode, `i` to insert |
 | `--peer <host>` | Device to include in the fleet overview; repeatable |
@@ -237,11 +237,14 @@ tries to reconstruct.
 
 ## Scrolling
 
-The app is keyboard-first, so the wheel is **off** by default: terminals
-suppress their own text selection while mouse reporting is on, which is a poor
-trade for a scroll you can do with `pgup`. Pass `--mouse` if you want it.
-Scrolling away from the newest output is announced in the status bar with the
-way back (`ctrl+g`).
+The wheel scrolls the transcript, and a click on a tab in the session bar
+switches to it — mouse reporting is **on** by default, because those two are
+what most people reaching for a mouse actually want. The cost is real but
+small and one-sided: terminals suppress their own text selection while
+reporting is on, so selecting text to copy needs shift held (and the app's own
+`alt+c` / `ctrl+y` copy needs nothing). Pass `--no-mouse` to put selection back
+on plain drag. Scrolling away from the newest output is announced in the
+status bar with the way back (`ctrl+g`).
 
 ## Searching the transcript
 
@@ -448,7 +451,10 @@ closed this way either, the same guard `/close` already has.
 **The bell.** When a session's turn finishes, the terminal bell rings — that is
 the point of running several: you start one, go and do something else, and get
 told when it is done. A session you are already looking at is marked seen
-rather than nagged about. `--no-bell` turns the sound off.
+rather than nagged about. A background job that finishes rings the same bell
+with a status line naming it, and so does a fleet dispatch returning from a
+peer — anything the user has stopped waiting for gets announced, never just
+the turns. `--no-bell` turns the sound off.
 
 ## Background agents
 
@@ -552,10 +558,23 @@ No `apiKeyEnv` is needed on either — a stored sign-in authenticates its route
 beneath any key configured there, so an empty config is enough once `/providers`
 has run.
 
+## First run
+
+On a fresh install the app opens with a short setup list: interface language,
+color palette, provider sign-in (`/providers`), and the one shell command
+voice control needs. Each row opens the picker or shows the step it names,
+and closing the list — enter on the last row or `esc` — records that this
+machine has seen it; it never returns unasked.
+
 ## Color palettes
 
 `/theme` opens a picker over the palettes the app ships with; `/theme <name>`
-switches straight away.
+switches straight away. Moving through the picker repaints the whole app in
+the highlighted palette — browsing by arrow key *is* trying it on — and `esc`
+puts back what was in force; `enter` keeps what you landed on. The same
+preview applies to `/lang`. And `/theme <par<Tab>` completes a palette name,
+shared prefix first, then opens the picker; `/lang <par<Tab>` does the same
+for languages.
 
 | Theme | |
 |---|---|
@@ -1003,7 +1022,7 @@ regression still would.
     provider parses the real command line.
   - `dsh --profile tui </dev/null` boots the bundle and exits on the non-TTY
     guard.
-- **34 suites, 2701 assertions**, covering rendering (including a pty round
+- **34 suites, 2722 assertions**, covering rendering (including a pty round
   trip through the real screen, decoder, and frame renderer), streaming
   projection, queueing, steering, persistence, the usage ledger and its
   colored dashboard, session storage, cross-session search, the panels
