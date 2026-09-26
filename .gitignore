@@ -1,6 +1,11 @@
 node_modules
-lib
 *.tsbuildinfo
+
+# lib/ is committed on purpose. The dshfind registry inspects the public
+# source tree and requires the manifest's `main` to be a file that is actually
+# in the repository — build output that only exists after `npm run build` fails
+# its check with `missing_file`. Rebuild and commit it with any source change,
+# or the registry serves different code than npm does.
 
 # Claude Code worktrees and local session state live inside the repo.
 .claude
