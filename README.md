@@ -734,7 +734,7 @@ regression still would.
     provider parses the real command line.
   - `dsh --profile tui </dev/null` boots the bundle and exits on the non-TTY
     guard.
-- **29 suites, 1460 assertions**, covering rendering (including a pty round
+- **30 suites, 1472 assertions**, covering rendering (including a pty round
   trip through the real screen, decoder, and frame renderer), streaming
   projection, queueing, steering, persistence, session storage, cross-session
   search, the panels, the plugin seam, i18n, the fleet, and the render cache.
@@ -757,17 +757,27 @@ regression still would.
 - **`/mcp` reads, it does not manage.** The MCP client is configured by
   composition, so the pane reports the bridge-prefixed tools that are actually
   mounted and where to declare a server — there is no runtime add/remove.
-- **Two release steps remain manual**: publishing to npm (needs the account's
-  credentials) and listing on dshfind.
+- **Published** to npm as [`moqi-tui`](https://www.npmjs.com/package/moqi-tui).
+  Listing on dshfind is the one release step still done by hand.
 
 ## Release steps
 
 ```sh
-npm test              # 29 suites, including the pty round trip
+npm test              # 30 suites, including the pty round trip
 npm run test:live     # a real model turn through the TUI (needs credentials)
 npm run test:package  # packs, installs into a clean prefix + DSH_HOME, boots
+npm run build         # and commit lib/ — see below
 npm publish           # prepublishOnly re-runs build + typecheck + npm test
 ```
+
+**`lib/` is committed, and has to be rebuilt and committed with any source
+change.** The dshfind registry inspects this repository's public source tree
+and requires the manifest's `main` to be a file that is actually in it; build
+output that only appears after `npm run build` fails its check with
+`missing_file`. The cost of that is a build artifact in git, and the risk is a
+stale one — if `lib/` lags `src/`, the registry describes different code than
+npm ships. `tsc` output is deterministic for a given source and compiler, so
+`npm run build && git diff --exit-code lib` says whether the tree is honest.
 
 `prepublishOnly` runs all four gates, so publishing needs `dsh` on `PATH` — a
 broken artifact must fail the publish rather than reach the registry.

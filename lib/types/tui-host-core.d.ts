@@ -1,0 +1,62 @@
+/**
+ * The `tuiHost` seam's framework-free half: what a shortcut claim and the
+ * status slot mean, with no Cordis import.
+ *
+ * It lives apart from `./tui-host.ts` so `npm test` can exercise it without a
+ * Harness on disk — the suites run from a bare `npm ci`, where `@deepseek-ai/*`
+ * does not resolve at all.
+ * @module
+ */
+/** The name the service registers under (`ctx.tuiHost`). */
+export declare const TUI_HOST_NAME = "tuiHost";
+/** One plugin-registered key combination. */
+export interface TuiShortcut {
+    /** Canonical key name the app dispatches, e.g. `ctrl+shift+g`. */
+    combo: string;
+    /** One-line description, for refusal messages and future help. */
+    label: string;
+    /** Called on the keypress; a throw is reported as a status line. */
+    handler: () => void;
+}
+/**
+ * Combinations the app itself owns.
+ *
+ * Built-ins win outright: a plugin that tries to take `ctrl+c` would be able to
+ * swallow the quit confirmation, so the registration is refused rather than
+ * silently ordered.
+ */
+export declare const RESERVED_COMBOS: ReadonlySet<string>;
+/** Why a registration was refused, or `undefined` when it was accepted. */
+export declare function shortcutProblem(combo: string, taken: ReadonlySet<string>): string | undefined;
+/** Shortcut claims, without any Cordis dependency — the testable half. */
+export declare class ShortcutRegistry {
+    private readonly shortcuts;
+    /**
+     * Claim a key combination.
+     *
+     * @returns a disposer that releases it, or `undefined` when the combination
+     *   is reserved, malformed, or already registered.
+     */
+    register(shortcut: TuiShortcut): (() => void) | undefined;
+    /** Every registered combination, in registration order. */
+    registered(): readonly TuiShortcut[];
+    /** The label for one combination, when it is claimed. */
+    labelOf(combo: string): string | undefined;
+    /**
+     * Run the handler for one key, if a plugin owns it.
+     *
+     * @returns whether the key was claimed, so the app can stop before it treats
+     *   the key as text.
+     */
+    dispatch(combo: string): boolean;
+}
+/** The one-line status slot, also independent of Cordis. */
+export declare class StatusLine {
+    private line;
+    /**
+     * Contribute the line. The slot is replaced, not stacked: a terminal has one
+     * line to give, and last registration wins — the same rule a status bar has.
+     */
+    set(text: string | undefined): () => void;
+    get(): string | undefined;
+}
