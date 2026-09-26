@@ -7,6 +7,7 @@
  * @module
  */
 import { type FleetView } from './fleet.ts';
+import { type UsageView } from './usage-view.ts';
 import { Composer, type Message, type Palette, type BackgroundAgent, type Picker, type Segment, type SessionSummary } from './state.ts';
 import { type AtMenu } from './atfile.ts';
 import type { PanelView } from './panels.ts';
@@ -67,6 +68,11 @@ export interface Snapshot {
      * snapshot builder renders exactly as before.
      */
     fleet?: FleetView;
+    /**
+     * The `/usage` dashboard, when it is open. Optional so every existing
+     * snapshot builder renders exactly as before.
+     */
+    usage?: UsageView;
     /**
      * Push-to-talk state, while the microphone is open or whisper is running.
      * Optional so every existing snapshot builder renders exactly as before.

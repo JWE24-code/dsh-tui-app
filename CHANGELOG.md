@@ -27,17 +27,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   being replaced by it. Signing in authenticates the route; adding it to
   `/model` is still an ordinary `dsh-llm-pi-ai` config, documented in the
   README.
-- **`/usage`** — a running per-provider token ledger: prompt, completion, and
-  turns, tallied once per finished turn from what the provider itself
-  reported, kept across a restart the same way the composer history is, and
-  sorted busiest-first. Unlike the footer's per-turn counter, this is the
-  total across every session, not just the one on screen. Above the table, a
-  small bar chart gives each provider's share of every token spent anywhere —
-  scaled to the grand total, not to the busiest provider, so two close
-  providers read as two bars close in length rather than one exaggerated
-  against the other. A turn that reported no usage (interrupted before its
-  first frame) adds nothing rather than a phantom zero-token row. `/usage
-  reset` clears the ledger.
+- **`/usage`** — a full-screen colored dashboard, not a markdown overlay, so
+  it can carry real per-provider color: three rolling-window sections
+  (session 5h, week 7d — the shape Anthropic's Claude Pro/Max and z.ai's GLM
+  coding plan both rate-limit on — and a lifetime total that never forgets),
+  each a bar chart of every provider's share of the tokens spent *in that
+  window*, scaled to that window's own total rather than to its busiest
+  provider, so two close providers read as two bars close in length rather
+  than one exaggerated against the other. A provider keeps the same color in
+  every section it appears in. Once a DeepSeek-routed provider has been used,
+  a status line reports DeepSeek's own published peak/off-peak pricing
+  schedule (standard rates 01:00–04:00 and 06:00–10:00 UTC on weekdays, half
+  price every other hour) and the time to the next change. Session and week
+  are computed from a timestamped log kept alongside the lifetime ledger,
+  pruned past 7 days on every write; a turn that reported no usage
+  (interrupted before its first frame) adds nothing to either, rather than a
+  phantom zero-token row. `/usage reset` clears both.
 - **`x` closes a session from the `/sessions` list** without leaving it, so
   tidying up several open sessions is not a switch-then-`/close`-then-reopen
   loop. The last session still cannot be closed this way, the same guard

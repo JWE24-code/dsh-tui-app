@@ -130,7 +130,18 @@ import {
   type PersistedState,
 } from './persist.ts'
 import { VERSION } from './version.ts'
-import { recordUsage, renderUsage, type UsageLedger } from './usage.ts'
+import {
+  SESSION_MS,
+  WEEK_MS,
+  deepSeekPeakStatus,
+  looksLikeDeepSeek,
+  recordUsage,
+  recordUsageEntry,
+  windowUsage,
+  type UsageEntry,
+  type UsageLedger,
+} from './usage.ts'
+import { UsageView } from './tui/usage-view.ts'
 import {
   FleetView,
   dispatchArgv,
@@ -483,10 +494,15 @@ class TuiApp {
     sessions: [],
     activeSession: 0,
     usage: {},
+    usageEntries: [],
   }
   private persistTimer: NodeJS.Timeout | undefined
   /** Per-provider token totals across every session, restored on launch. */
   private usageLedger: UsageLedger = {}
+  /** The rolling-window log `/usage`'s session and week views read from. */
+  private usageEntries: UsageEntry[] = []
+  /** The `/usage` dashboard's own open/closed state and last-drawn data. */
+  private readonly usageView = new UsageView()
 
   /** The cross-device overview, and what this device publishes to it. */
   private readonly fleet = new FleetView()
@@ -556,6 +572,7 @@ class TuiApp {
     // composer history and the thinking preference, both best-effort.
     this.persisted = await loadState()
     this.usageLedger = this.persisted.usage
+    this.usageEntries = this.persisted.usageEntries
     this.history.load(this.persisted.inputHistory)
     if (this.config.thinking === undefined) this.showThinking = this.persisted.thinking
     if (this.persisted.theme !== undefined) applyTheme(this.persisted.theme)
@@ -1394,6 +1411,7 @@ class TuiApp {
       confirmText: this.confirming ? this.confirmPrompt : undefined,
       searchActive: this.search !== undefined,
       fleet: this.fleet,
+      usage: this.usageView,
       panel: this.panel?.view(),
       selectedTurn: this.selectedTurn,
       pluginLine: this.tuiHost.statusLine(),
@@ -1668,6 +1686,30 @@ class TuiApp {
   }
 
   /**
+   * `/usage`: compute the session (5h) and week (7d) rolling windows from the
+   * entry log, and DeepSeek's peak-hour status when a DeepSeek-like provider
+   * has been used, then show the dashboard.
+   *
+   * A snapshot, the same as `/jobs` and `/mcp` are: the pane draws exactly
+   * what was true the moment it opened rather than re-querying the clock on
+   * every repaint, so the countdown it shows stays consistent with the
+   * windows computed alongside it.
+   */
+  private openUsageView(): void {
+    const now = Date.now()
+    const session = windowUsage(this.usageEntries, SESSION_MS, now)
+    const week = windowUsage(this.usageEntries, WEEK_MS, now)
+    const usesDeepSeek = Object.keys(this.usageLedger).some((provider) => looksLikeDeepSeek(provider))
+    const deepSeekPeak = usesDeepSeek ? deepSeekPeakStatus(now) : undefined
+    this.usageView.setData(session, week, this.usageLedger, deepSeekPeak, now)
+    this.usageView.show()
+    this.picker.hide()
+    this.palette.close()
+    this.setStatus('')
+    this.paint()
+  }
+
+  /**
    * Collect from this device and every configured peer.
    *
    * The pane is already on screen when this runs, so a slow or unreachable
@@ -1880,6 +1922,20 @@ class TuiApp {
     }
   }
 
+  /** The `/usage` dashboard is read-only: esc/ctrl+c/q are the only keys it answers to. */
+  private handleUsageKey(key: Key): void {
+    switch (key.name) {
+      case 'esc':
+      case 'ctrl+c':
+      case 'q':
+        this.usageView.hide()
+        this.paint()
+        break
+      default:
+        break
+    }
+  }
+
   /**
    * Run a task on a peer's headless profile over the SSH channel.
    *
@@ -2066,6 +2122,10 @@ class TuiApp {
       }
       if (this.fleet.open) {
         this.handleFleetKey(key)
+        return
+      }
+      if (this.usageView.open) {
+        this.handleUsageKey(key)
         return
       }
       if (this.picker.kind !== 'none') {
@@ -2690,6 +2750,7 @@ class TuiApp {
       sessions: this.openSessions(),
       activeSession: this.activeSessionIndex(),
       usage: this.usageLedger,
+      usageEntries: this.usageEntries,
     }
     // Synchronous on purpose: this runs on the quit path, where an async write
     // would be abandoned the moment `exit(0)` tears the process down.
@@ -3143,12 +3204,9 @@ class TuiApp {
       // request just settled, which stays correct even though `current`
       // already points at a switch queued for the next turn.
       const provider = tab.selection.assembled?.provider ?? tab.selection.current?.provider ?? ''
-      this.usageLedger = recordUsage(
-        this.usageLedger,
-        provider,
-        tab.promptTokens - tab.turnStartPromptTokens,
-        turnOutput,
-      )
+      const turnPrompt = tab.promptTokens - tab.turnStartPromptTokens
+      this.usageLedger = recordUsage(this.usageLedger, provider, turnPrompt, turnOutput)
+      this.usageEntries = recordUsageEntry(this.usageEntries, provider, turnPrompt, turnOutput, Date.now())
       this.persistSoon()
       tab.streaming = false
       tab.streamStartedAt = 0
@@ -3517,12 +3575,14 @@ class TuiApp {
       case 'usage': {
         if (rawInput.trim() === 'reset') {
           this.usageLedger = {}
+          this.usageEntries = []
+          this.usageView.hide()
           this.persistSoon()
           this.setStatus('usage ledger reset')
           this.paint()
           return
         }
-        this.showOverlay(renderUsage(this.usageLedger), '/usage reset clears it · esc to close')
+        this.openUsageView()
         return
       }
 

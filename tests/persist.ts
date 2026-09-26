@@ -34,11 +34,20 @@ import {
 } from '../src/persist.ts'
 
 /** The current on-disk version, as the writer stamps it. */
-const VERSION = 3
+const VERSION = 4
 
 /** A state with only the fields a case cares about spelled out. */
 function state(partial: Partial<PersistedState> = {}): PersistedState {
-  return { inputHistory: [], thinking: false, peers: [], sessions: [], activeSession: 0, usage: {}, ...partial }
+  return {
+    inputHistory: [],
+    thinking: false,
+    peers: [],
+    sessions: [],
+    activeSession: 0,
+    usage: {},
+    usageEntries: [],
+    ...partial,
+  }
 }
 
 /** A remembered session, defaulting the fields a case is not about. */
@@ -130,6 +139,35 @@ try {
   check('a well-formed usage row survives', mixedUsage.usage['anthropic']?.promptTokens === 10)
   check('a usage row with a non-numeric field is dropped', mixedUsage.usage['broken'] === undefined)
   check('a usage row that is not an object is dropped', mixedUsage.usage['alsoBroken'] === undefined)
+
+  // ---------------------------------------------- round trip: usageEntries
+
+  await saveState(
+    state({ usageEntries: [{ provider: 'anthropic', promptTokens: 100, completionTokens: 20, at: 1_700_000_000_000 }] }),
+    env,
+  )
+  const withEntries = await loadState(env)
+  check('save/load round-trips a usage entry', withEntries.usageEntries[0]?.provider === 'anthropic')
+  check('save/load round-trips an entry\'s timestamp', withEntries.usageEntries[0]?.at === 1_700_000_000_000)
+  check('the fallback carries no usage entries', (await loadState({ DSH_HOME: join(sandbox, 'nothing') })).usageEntries.length === 0)
+
+  await writeUsageFixture(
+    statePath(env),
+    JSON.stringify({
+      ...state(),
+      version: VERSION,
+      usageEntries: [
+        { provider: 'anthropic', promptTokens: 10, completionTokens: 5, at: 1 },
+        { provider: 'broken', promptTokens: 'nope', completionTokens: 5, at: 1 },
+        { promptTokens: 10, completionTokens: 5, at: 1 },
+        'not even an object',
+      ],
+    }),
+    'utf8',
+  )
+  const mixedEntries = await loadState(env)
+  check('a well-formed usage entry survives', mixedEntries.usageEntries.length === 1)
+  check('the surviving entry is the well-formed one', mixedEntries.usageEntries[0]?.provider === 'anthropic')
 
   // ------------------------------------------------- unreadable states
 

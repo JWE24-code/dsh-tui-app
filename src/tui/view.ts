@@ -13,6 +13,7 @@ import {
   renderFleet,
   type FleetView,
 } from './fleet.ts'
+import { renderUsagePane, type UsageView } from './usage-view.ts'
 import { renderMarkdown } from './markdown.ts'
 import {
   Composer,
@@ -131,6 +132,11 @@ export interface Snapshot {
    * snapshot builder renders exactly as before.
    */
   fleet?: FleetView
+  /**
+   * The `/usage` dashboard, when it is open. Optional so every existing
+   * snapshot builder renders exactly as before.
+   */
+  usage?: UsageView
   /**
    * Push-to-talk state, while the microphone is open or whisper is running.
    * Optional so every existing snapshot builder renders exactly as before.
@@ -1017,6 +1023,23 @@ function fleetPane(snapshot: Snapshot, geometry: Layout): string[] {
   return out.slice(0, height)
 }
 
+/**
+ * The `/usage` dashboard. `renderUsagePane` draws the whole body; this
+ * function only clips it to the viewport and adds the key hint, the same
+ * split {@link fleetPane} keeps with `renderFleet`.
+ */
+function usagePane(snapshot: Snapshot, geometry: Layout): string[] {
+  const width = geometry.contentWidth
+  const height = geometry.viewportRows
+  const usage = snapshot.usage
+  if (usage === undefined) return []
+  const body = renderUsagePane(usage, width)
+  const out = body.slice(0, Math.max(height - 1, 0))
+  while (out.length < height - 1) out.push('')
+  out.push(muted('esc back'))
+  return out.slice(0, height)
+}
+
 /** Build a full frame plus the cursor position for the screen to place. */
 export function render(snapshot: Snapshot): {
   lines: string[]
@@ -1039,9 +1062,11 @@ export function render(snapshot: Snapshot): {
         ? panelPane(snapshot, geometry)
         : snapshot.fleet?.open === true
           ? fleetPane(snapshot, geometry)
-          : snapshot.picker.kind === 'none'
-            ? viewport(snapshot, geometry)
-            : pickerPane(snapshot, geometry)
+          : snapshot.usage?.open === true
+            ? usagePane(snapshot, geometry)
+            : snapshot.picker.kind === 'none'
+              ? viewport(snapshot, geometry)
+              : pickerPane(snapshot, geometry)
     rows.push(...body)
   }
   if (geometry.showGap) rows.push('')
@@ -1067,7 +1092,10 @@ export function render(snapshot: Snapshot): {
   // of that box is about to be shifted right by the gutter.
   const lines = rows.map((line) => gutter + line)
   const cursor =
-    snapshot.picker.kind === 'none' && snapshot.fleet?.open !== true && snapshot.panel === undefined
+    snapshot.picker.kind === 'none' &&
+    snapshot.fleet?.open !== true &&
+    snapshot.usage?.open !== true &&
+    snapshot.panel === undefined
       ? {
           row: composerTop + composer.cursor.row,
           column: composer.cursor.column + gutter.length,

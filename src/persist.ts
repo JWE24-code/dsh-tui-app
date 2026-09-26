@@ -13,7 +13,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
-import type { UsageLedger } from './usage.ts'
+import type { UsageEntry, UsageLedger } from './usage.ts'
 
 /**
  * One session that was open when the app last exited.
@@ -55,10 +55,16 @@ export interface PersistedState {
   activeSession: number
   /** Per-provider token usage, accumulated across every session so far. */
   usage: UsageLedger
+  /**
+   * The rolling-window log `/usage`'s session (5h) and week (7d) views are
+   * computed from — bounded to the last 7 days, unlike `usage` itself, which
+   * never forgets.
+   */
+  usageEntries: UsageEntry[]
 }
 
 /** Version of the on-disk shape, so a future change can migrate or discard. */
-const STATE_VERSION = 3
+const STATE_VERSION = 4
 
 /**
  * How many sessions a single restore will bring back.
@@ -74,7 +80,7 @@ type OnDisk = PersistedState & { version?: number }
 
 /** The state used when there is nothing readable on disk. */
 function fallbackState(): PersistedState {
-  return { inputHistory: [], thinking: false, peers: [], sessions: [], activeSession: 0, usage: {} }
+  return { inputHistory: [], thinking: false, peers: [], sessions: [], activeSession: 0, usage: {}, usageEntries: [] }
 }
 
 /** Coerce one on-disk usage row, or reject it outright. */
@@ -103,6 +109,36 @@ function readUsage(value: unknown): UsageLedger {
     if (row !== undefined) ledger[provider] = row
   }
   return ledger
+}
+
+/** Coerce one on-disk rolling-window entry, or reject it outright. */
+function readUsageEntry(value: unknown): UsageEntry | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const record = value as Record<string, unknown>
+  const provider = record['provider']
+  const promptTokens = record['promptTokens']
+  const completionTokens = record['completionTokens']
+  const at = record['at']
+  if (
+    typeof provider !== 'string' || provider === '' ||
+    typeof promptTokens !== 'number' || !Number.isFinite(promptTokens) ||
+    typeof completionTokens !== 'number' || !Number.isFinite(completionTokens) ||
+    typeof at !== 'number' || !Number.isFinite(at)
+  ) {
+    return undefined
+  }
+  return { provider, promptTokens, completionTokens, at }
+}
+
+/** Coerce the on-disk rolling-window log, dropping any entry that does not parse. */
+function readUsageEntries(value: unknown): UsageEntry[] {
+  if (!Array.isArray(value)) return []
+  const entries: UsageEntry[] = []
+  for (const item of value) {
+    const entry = readUsageEntry(item)
+    if (entry !== undefined) entries.push(entry)
+  }
+  return entries
 }
 
 /** Where the state file lives: `$DSH_HOME/tui-state.json`, default `~/.dsh`. */
@@ -174,6 +210,7 @@ export function decodeState(raw: string): PersistedState {
     sessions,
     activeSession,
     usage: readUsage(parsed.usage),
+    usageEntries: readUsageEntries(parsed.usageEntries),
   }
 }
 

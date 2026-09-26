@@ -1,9 +1,24 @@
 /**
- * Usage-ledger smoke: folding turns into per-provider totals, and rendering
- * the `/usage` overlay from them.
+ * Usage-ledger smoke: folding turns into per-provider totals, rolling
+ * session/week windows, and DeepSeek's peak-hour schedule.
  */
 
-import { recordUsage, renderUsage, renderUsageChart, totalUsage, type UsageLedger } from '../src/usage.ts'
+import {
+  CHART_WIDTH,
+  SESSION_MS,
+  WEEK_MS,
+  deepSeekPeakStatus,
+  filledWidth,
+  grouped,
+  looksLikeDeepSeek,
+  recordUsage,
+  recordUsageEntry,
+  sortedRows,
+  totalUsage,
+  windowUsage,
+  type UsageEntry,
+  type UsageLedger,
+} from '../src/usage.ts'
 
 let passed = 0
 let failed = 0
@@ -51,53 +66,101 @@ check('total sums every provider\'s completion tokens', total.completionTokens =
 check('total sums every provider\'s turns', total.turns === 3)
 check('an empty ledger totals to zero', totalUsage({}).promptTokens === 0)
 
-// --------------------------------------------------------------- renderUsage
+// ---------------------------------------------------------------- sortedRows
 
-const empty = renderUsage({})
-check('an empty ledger says so rather than printing an empty table', empty.includes('Nothing recorded yet'))
-check('an empty ledger still carries the heading', empty.includes('Usage'))
+const rows = sortedRows(ledger)
+check('rows are sorted busiest first', rows[0]?.[0] === 'anthropic' && rows[1]?.[0] === 'openai-codex')
+check('an empty ledger sorts to nothing', sortedRows({}).length === 0)
 
-const rendered = renderUsage(ledger)
-check('the busier provider is listed', rendered.includes('anthropic'))
-check('the quieter provider is listed too', rendered.includes('openai-codex'))
-check('token counts are grouped with commas', rendered.includes('2,000'))
-check('a total row sums every provider', rendered.includes('2,500'))
-// anthropic (2000+300=2300 total) outranks openai-codex (500+100=600): the
-// busier provider's row must come first.
-check(
-  'providers are sorted by total tokens, busiest first',
-  rendered.indexOf('anthropic') < rendered.indexOf('openai-codex'),
-)
-check('renderUsage never fabricates a dollar figure', !rendered.includes('$'))
-check('renderUsage folds the chart in above the table', rendered.includes('█'))
+// ------------------------------------------------------------------ grouped
 
-// ------------------------------------------------------------ renderUsageChart
+check('grouped adds thousands separators', grouped(12345) === '12,345')
+check('grouped leaves small numbers alone', grouped(70) === '70')
 
-check('an empty ledger has no chart at all', renderUsageChart({}).length === 0)
+// --------------------------------------------------------------- filledWidth
 
-const chart = renderUsageChart(ledger).join('\n')
-check('the chart is fenced so the markdown renderer passes it through untouched', chart.startsWith('```') && chart.endsWith('```'))
-check('the chart lists the busier provider', chart.includes('anthropic'))
-check('the chart lists the quieter provider', chart.includes('openai-codex'))
-check(
-  'bars are scaled to share of the grand total, not the busiest provider alone — neither is full here',
-  !chart.includes('█'.repeat(24)),
-)
-check('the chart is sorted busiest first, same as the table', chart.indexOf('anthropic') < chart.indexOf('openai-codex'))
+check('a zero share fills nothing', filledWidth(0) === 0)
+check('a full share fills every cell', filledWidth(1) === CHART_WIDTH)
+check('a share above 1 is clamped to the chart width', filledWidth(1.5) === CHART_WIDTH)
+check('a negative share is clamped to zero', filledWidth(-0.2) === 0)
+check('a half share fills half the chart', filledWidth(0.5) === CHART_WIDTH / 2)
+check('a share just shy of 100% still rounds up to a full bar', filledWidth(0.99) === CHART_WIDTH)
 
-// anthropic is 2300/2900 of the two-provider total ≈ 79%; openai-codex is
-// 600/2900 ≈ 21%. Percentages must reflect share of the grand total, not of
-// the busiest provider (which would read anthropic as 100%).
-const twoProvider = renderUsageChart({
-  anthropic: { promptTokens: 2000, completionTokens: 300, turns: 2 },
-  'openai-codex': { promptTokens: 500, completionTokens: 100, turns: 1 },
-}).join('\n')
-check('the busier provider\'s share is a percentage of the grand total', twoProvider.includes('79%'))
-check('the quieter provider\'s share is a percentage of the grand total', twoProvider.includes('21%'))
+// ---------------------------------------------------------- rolling windows
 
-const solo = renderUsageChart({ zai: { promptTokens: 10, completionTokens: 5, turns: 1 } }).join('\n')
-check('a single provider is its own whole share: 100%', solo.includes('100%'))
-check('a single provider\'s bar is fully filled', solo.includes('█'.repeat(24)))
+const hour = 60 * 60 * 1000
+const t0 = 1_700_000_000_000 // an arbitrary but fixed anchor
+
+let entries: UsageEntry[] = []
+entries = recordUsageEntry(entries, 'anthropic', 100, 20, t0)
+check('a fresh entry log gets one row', entries.length === 1)
+check('the entry carries its own timestamp', entries[0]?.at === t0)
+
+entries = recordUsageEntry(entries, 'anthropic', 50, 10, t0 + hour)
+entries = recordUsageEntry(entries, 'zai', 30, 5, t0 + hour)
+check('later turns append rather than replace', entries.length === 3)
+
+const zeroDelta = recordUsageEntry(entries, 'anthropic', 0, 0, t0 + 2 * hour)
+check('a turn with no measured usage adds no entry', zeroDelta.length === entries.length)
+
+// windowUsage over a short window excludes what fell outside it.
+const sessionWindow = windowUsage(entries, SESSION_MS, t0 + hour)
+check('a window includes entries inside it', sessionWindow['anthropic']?.promptTokens === 150)
+check('a window sums every provider active inside it', sessionWindow['zai']?.promptTokens === 30)
+
+const tinyWindow = windowUsage(entries, 1, t0 + hour + 2 * hour)
+check('a window far past every entry includes nothing', Object.keys(tinyWindow).length === 0)
+
+const wideWindow = windowUsage(entries, WEEK_MS, t0 + hour)
+check('a window wide enough to cover everything matches the lifetime totals', wideWindow['anthropic']?.promptTokens === 150)
+
+// Pruning: an entry older than WEEK_MS relative to the newest write is dropped.
+let pruning: UsageEntry[] = []
+pruning = recordUsageEntry(pruning, 'anthropic', 10, 0, t0)
+pruning = recordUsageEntry(pruning, 'anthropic', 10, 0, t0 + WEEK_MS + hour)
+check('an entry older than the longest window is pruned on the next write', pruning.length === 1)
+check('the surviving entry is the newer one', pruning[0]?.at === t0 + WEEK_MS + hour)
+
+// A write that itself carries no usage still prunes stale entries.
+let pruneOnly: UsageEntry[] = [{ provider: 'anthropic', promptTokens: 5, completionTokens: 0, at: t0 }]
+pruneOnly = recordUsageEntry(pruneOnly, 'anthropic', 0, 0, t0 + WEEK_MS + hour)
+check('a zero-delta write still prunes what is now stale', pruneOnly.length === 0)
+
+// ------------------------------------------------------- DeepSeek peak hours
+
+// Wednesday 2024-01-03 02:00 UTC — inside the 01:00-04:00 peak window.
+const peakMoment = Date.UTC(2024, 0, 3, 2, 0, 0)
+const peakStatus = deepSeekPeakStatus(peakMoment)
+check('01:00-04:00 UTC on a weekday is peak', peakStatus.peak === true)
+check('the next transition from inside a peak window is its own end (04:00)', peakStatus.changesAt === Date.UTC(2024, 0, 3, 4, 0, 0))
+
+// The same Wednesday at 05:00 UTC — the gap between the two peak windows.
+const gapMoment = Date.UTC(2024, 0, 3, 5, 0, 0)
+const gapStatus = deepSeekPeakStatus(gapMoment)
+check('05:00 UTC, between the two peak windows, is off-peak', gapStatus.peak === false)
+check('off-peak in the gap transitions at the next window\'s start (06:00)', gapStatus.changesAt === Date.UTC(2024, 0, 3, 6, 0, 0))
+
+// Wednesday 10:30 UTC — just past the second window closes.
+const eveningMoment = Date.UTC(2024, 0, 3, 10, 30, 0)
+const eveningStatus = deepSeekPeakStatus(eveningMoment)
+check('10:30 UTC, after the second window, is off-peak', eveningStatus.peak === false)
+check('off-peak in the evening transitions at tomorrow\'s first window (01:00)', eveningStatus.changesAt === Date.UTC(2024, 0, 4, 1, 0, 0))
+
+// Saturday — entirely off-peak regardless of hour.
+const saturdayMoment = Date.UTC(2024, 0, 6, 2, 0, 0) // 2024-01-06 is a Saturday
+const saturdayStatus = deepSeekPeakStatus(saturdayMoment)
+check('02:00 UTC on a Saturday is off-peak even though the hour matches a weekday window', saturdayStatus.peak === false)
+check('the weekend transitions at Monday\'s first window', saturdayStatus.changesAt === Date.UTC(2024, 0, 8, 1, 0, 0))
+
+// Friday afternoon, the longest off-peak stretch the schedule allows.
+const fridayAfternoon = Date.UTC(2024, 0, 5, 15, 0, 0) // 2024-01-05 is a Friday
+const fridayStatus = deepSeekPeakStatus(fridayAfternoon)
+check('Friday afternoon is off-peak', fridayStatus.peak === false)
+check('the long weekend stretch still resolves within the search window', fridayStatus.changesAt === Date.UTC(2024, 0, 8, 1, 0, 0))
+
+check('a provider id containing "deepseek" is recognized', looksLikeDeepSeek('deepseek') === true)
+check('a provider id is matched case-insensitively', looksLikeDeepSeek('DeepSeek-Official') === true)
+check('an unrelated provider id is not', looksLikeDeepSeek('anthropic') === false)
 
 if (failed > 0) {
   console.error(`${String(failed)} usage checks failed`)

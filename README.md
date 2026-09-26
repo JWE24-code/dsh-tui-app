@@ -648,34 +648,50 @@ rather than faked.
 
 That footer is one turn's own numbers, on the session on screen — it says
 nothing about what came before, or what another provider has been spending in
-another tab. `/usage` is the running total instead: every provider you have
-actually used, tallied one settled turn at a time, across every session, and
-kept across a restart the same way the composer history is.
+another tab. `/usage` is a full-screen colored dashboard instead: every
+provider you have actually used, in three rolling windows, kept across a
+restart the same way the composer history is.
 
 ```
-**Usage**
+ Usage
 
-anthropic  ████████████████████████████████░░░░░░  71%  54,550
-zai        █████████████░░░░░░░░░░░░░░░░░░░░░░░░░░  29%  22,122
+ Session (5h)
+   anthropic  ████████████████████████████████░░░░░░  71%   1,204
+   zai        █████████████░░░░░░░░░░░░░░░░░░░░░░░░░░  29%      70
 
-| Provider | Prompt | Completion | Total | Turns |
-| --- | ---: | ---: | ---: | ---: |
-| anthropic | 48,210 | 6,340 | 54,550 | 12 |
-| zai | 19,004 | 3,118 | 22,122 | 9 |
-| **total** | **67,214** | **9,458** | **76,672** | **21** |
+ Week (7d)
+   anthropic  ██████████████████████████████░░░░░░░░░░  78%  22,110
+   zai        ██████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  22%   6,134
 
-Counted per finished turn, from the tokens each provider itself reported —
-not an estimate, and not a cost, since pricing is not this app's to know.
+ Lifetime
+   anthropic  ████████████████████████████████░░░░░░░░  71%  54,550
+   zai        █████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░  29%  22,122
+
+ ⚠ DeepSeek peak pricing now — off-peak (half price) in 1h 12m
+
+ esc back
 ```
 
-The bar for each provider is its share of every token spent anywhere, not a
-share of the busiest one — two providers within a few points of each other
-read as two bars close in length, not one full bar and a shorter one exaggerating
-the gap. Busiest provider first, in the chart and the table alike. A turn
+**Session (5h)** and **week (7d)** are rolling windows — the same shape
+Anthropic's Claude Pro/Max and z.ai's GLM coding plan both rate-limit on —
+computed from a timestamped log kept alongside the lifetime ledger, pruned
+past 7 days on every write. **Lifetime** never forgets, and its own
+busiest-first order is what keeps a provider's color the same in every section
+it appears in, even the ones it has aged out of. Each bar is that provider's
+share of every token spent *in that window*, not of the busiest provider in
+it — two providers within a few points of each other read as two bars close
+in length, not one full bar and a shorter one exaggerating the gap. A turn
 interrupted before it reported any usage adds nothing rather than a phantom
-zero-token row, so the turn count only ever means turns that actually
-answered. `/usage reset` clears the ledger — there is no undo, the same as
-`/delete`.
+zero-token row.
+
+DeepSeek's own published peak/off-peak schedule — standard pricing 01:00–04:00
+and 06:00–10:00 UTC on weekdays, half price every other hour including all of
+both weekend days — earns a status line once a DeepSeek-routed provider has
+been used, so the pane doubles as a reminder of whether the clock favors
+answering now or waiting. Chinese public holidays are also off-peak by
+DeepSeek's own page but are not modeled here, for want of a holiday calendar
+to check against. `/usage reset` clears the ledger and the rolling-window log
+alike — there is no undo, the same as `/delete`.
 
 `/jobs` lists what ran or is still running in the background for this session —
 state, elapsed time, and the producer's own detail line — with running jobs
@@ -764,7 +780,7 @@ src/
   index.ts         the app plugin: Harness wiring, key dispatch, commands
   startup.ts       the cmdline provider (--resume/--model/--thinking/...)
   persist.ts       durable history, preferences, and open sessions under $DSH_HOME
-  usage.ts         per-provider token ledger for /usage, folded in one turn at a time
+  usage.ts         per-provider token ledger, rolling windows, and DeepSeek's peak hours
   sessions-store.ts  session storage paths and deletion under $DSH_HOME
   version.ts       reads the package version for --version and /update
   tui/
@@ -774,6 +790,7 @@ src/
     state.ts       composer, palette, picker, history, token formatting
     stream.ts      projects assistant-stream chunks onto the transcript
     export.ts      transcript to markdown for /export
+    usage-view.ts  the /usage dashboard: colored bars, drawn from usage.ts's data
     markdown.ts    markdown to ANSI plus a small syntax highlighter
     text.ts        ANSI-aware width, wrap, truncate
     theme.ts       adaptive palette and SGR styling
@@ -850,11 +867,12 @@ regression still would.
     provider parses the real command line.
   - `dsh --profile tui </dev/null` boots the bundle and exits on the non-TTY
     guard.
-- **31 suites, 1560 assertions**, covering rendering (including a pty round
+- **32 suites, 1595 assertions**, covering rendering (including a pty round
   trip through the real screen, decoder, and frame renderer), streaming
-  projection, queueing, steering, persistence, the usage ledger, session
-  storage, cross-session search, the panels (including a running sign-in),
-  the plugin seam, i18n, the fleet, and the render cache.
+  projection, queueing, steering, persistence, the usage ledger and its
+  colored dashboard, session storage, cross-session search, the panels
+  (including a running sign-in), the plugin seam, i18n, the fleet, and the
+  render cache.
 - **The boot-to-model turn is now automated, on demand.** `npm run test:live`
   (`MOQI_LIVE=1`) boots `dsh --profile tui` under `script(1)`, types a
   prompt, and asserts that the model's answer reaches a painted frame before

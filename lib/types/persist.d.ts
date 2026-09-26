@@ -8,7 +8,7 @@
  * convenience, never a dependency.
  * @module moqi-tui/persist
  */
-import type { UsageLedger } from './usage.ts';
+import type { UsageEntry, UsageLedger } from './usage.ts';
 /**
  * One session that was open when the app last exited.
  *
@@ -48,6 +48,12 @@ export interface PersistedState {
     activeSession: number;
     /** Per-provider token usage, accumulated across every session so far. */
     usage: UsageLedger;
+    /**
+     * The rolling-window log `/usage`'s session (5h) and week (7d) views are
+     * computed from — bounded to the last 7 days, unlike `usage` itself, which
+     * never forgets.
+     */
+    usageEntries: UsageEntry[];
 }
 /**
  * How many sessions a single restore will bring back.
