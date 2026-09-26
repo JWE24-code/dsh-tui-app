@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **The dshfind listing is documented as automatic.** The repository carries
+  the `dsh-plugin` topic its marketplace indexes, so the README no longer
+  describes a listing step that no release needs.
 ## [0.3.0]
 
 ### Added

@@ -54,12 +54,18 @@ up provenance signing, which is why it is the fallback rather than the default.
 1. `CHANGELOG.md`: move the `[Unreleased]` entries under the new version.
 2. `package.json`: set the same version.
 3. `npm run build` and commit `lib/` — it is a committed artifact, and the
-   dshfind registry check fails if the manifest's `main` is not in the tree.
+   dshfind index checks the manifest's `main` against the tree.
 4. Commit, push to `main`, wait for CI to go green.
 5. Publish a GitHub Release with a tag matching the version (`v0.3.0` for
    `0.3.0`). The workflow checks the two agree and refuses otherwise.
 6. The workflow runs the full gate — `prepublishOnly` re-runs build, typecheck,
    `npm test`, and the packed-artifact check — then publishes with provenance.
+
+There is no marketplace listing step. [dshfind](https://dshfind.com) indexes
+public repositories that carry the `dsh-plugin` topic and re-syncs daily, so
+the topic is added once per repository rather than per release; its index also
+expects the packaged entry (`lib/`) to be committed, which the step above
+already guarantees.
 
 A re-run for a version already on the registry reports success and publishes
 nothing, so re-running a failed release job is safe. A manual run of the

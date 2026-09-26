@@ -1055,7 +1055,11 @@ regression still would.
   `ctx.sessionQuery`, so a profile without it reports that plainly instead of
   the command doing nothing.
 - **Published** to npm as [`moqi-tui`](https://www.npmjs.com/package/moqi-tui).
-  Listing on dshfind is the one release step still done by hand.
+  The repository carries the [`dsh-plugin`](https://github.com/topics/dsh-plugin)
+  topic, which is the whole of the [dshfind](https://dshfind.com) listing
+  mechanism: its marketplace indexes public repositories by that topic and
+  syncs daily, so there is no listing step to remember per release — a
+  repository appears within about a day of the topic being added.
 
 ## Release steps
 
