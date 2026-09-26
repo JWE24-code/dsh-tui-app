@@ -8,7 +8,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **Sign in to Claude Pro/Max and ChatGPT/Codex.** `/login` opens a picker
+- **Sign in to Claude Pro/Max and ChatGPT/Codex.** `/providers` opens a picker
   over every credential `ctx.authorization` knows how to obtain — a
   human-guided sign-in a plain API key cannot replace. This app adds no
   provider knowledge of its own: it renders whatever flows are registered,
@@ -18,16 +18,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   login for — from the moment it mounts. A flow's notices and questions are
   rendered as a panel that owns the keyboard until the attempt settles: a
   message plus a page and code to act on, or a prompt (text, a pasted secret,
-  or a choice of accounts) that `enter` answers and `esc` declines. Signing
-  in authenticates the route; adding it to `/model` is still an ordinary
+  or a choice of accounts) that `enter` answers and `esc` declines. `enter` on
+  a bare notice with a page opens it with the platform's own launcher
+  (`xdg-open`/`open`/`start`) instead of leaving it to be read and typed by
+  hand, and a device-code flow's page and code stay on screen once its own
+  prompt takes over, rather than being replaced by it. Signing in
+  authenticates the route; adding it to `/model` is still an ordinary
   `dsh-llm-pi-ai` config, documented in the README.
 - **`/usage`** — a running per-provider token ledger: prompt, completion, and
   turns, tallied once per finished turn from what the provider itself
   reported, kept across a restart the same way the composer history is, and
   sorted busiest-first. Unlike the footer's per-turn counter, this is the
-  total across every session, not just the one on screen. A turn that
-  reported no usage (interrupted before its first frame) adds nothing rather
-  than a phantom zero-token row. `/usage reset` clears the ledger.
+  total across every session, not just the one on screen. Above the table, a
+  small bar chart gives each provider's share of every token spent anywhere —
+  scaled to the grand total, not to the busiest provider, so two close
+  providers read as two bars close in length rather than one exaggerated
+  against the other. A turn that reported no usage (interrupted before its
+  first frame) adds nothing rather than a phantom zero-token row. `/usage
+  reset` clears the ledger.
 - **`x` closes a session from the `/sessions` list** without leaving it, so
   tidying up several open sessions is not a switch-then-`/close`-then-reopen
   loop. The last session still cannot be closed this way, the same guard
@@ -40,6 +48,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   behavior when this process is not attached to a real terminal on both
   ends, since there is then nothing to hand over.
 
+### Fixed
+
+- **Attaching to a remote fleet session could look like the whole app
+  restarting.** Handing the terminal to `ssh -t` running a second, nested copy
+  of this same app surfaced two real bugs on the way back: a stray `SIGHUP` —
+  a known hazard of a child taking over a tty — was read as the terminal
+  itself hanging up and closed the app outright, and the screen's diff cache,
+  left stale by the handover, made the next paint skip lines it believed were
+  unchanged, coming back to a screen with nothing on it but the new status
+  line. Both are fixed at the one seam every terminal handover already goes
+  through, so `alt+e`'s `$VISUAL`/`$EDITOR` round trip is hardened by the same
+  fix, caught live when a broken `$EDITOR` reproduced the second bug on the
+  first try.
+
 ### Changed
 
 - **The `/` command palette caps at 3 visible rows and scrolls**, however
@@ -48,6 +70,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`--vim` replaces the `/vim` command.** Modal editing is an editing
   preference set once at launch, not a mid-conversation toggle, so it moved
   to a startup flag alongside `--mouse` and `--no-bell`.
+- **`/login` renamed `/providers`.** A noun, matching `/model`, `/theme`, and
+  `/plugins` — the command browses and signs in to provider routes, it does
+  not itself perform "a login."
 
 ### Removed
 

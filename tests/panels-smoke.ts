@@ -226,6 +226,17 @@ check('the cursor is hidden while a panel owns the keyboard', render({
   check('the notice url is shown', withNotice.detail.includes('https://example.test/auth'))
   check('the notice code is shown', withNotice.detail.includes('ABCD-1234'))
   check('a bare notice offers no input line', withNotice.inputLabel === undefined)
+  check(
+    'a notice with a page to open hints that enter opens it',
+    withNotice.hint === 'enter opens the browser  ·  esc cancels the sign-in',
+  )
+
+  const urllessLogin = new LoginPanel('Some Provider')
+  urllessLogin.notice = { message: 'Working…' }
+  check(
+    'a notice with no page keeps the plain cancel hint',
+    urllessLogin.view().hint === 'esc cancels the sign-in',
+  )
 
   login.setPrompt({ kind: 'text', message: 'Paste the code shown on that page' })
   const withPromptAfterNotice = login.view()
@@ -281,7 +292,18 @@ check('the cursor is hidden while a panel owns the keyboard', render({
 
   login.setPrompt(undefined)
   check('clearing the prompt drops the draft too', login.answer() === undefined)
-  check('clearing the prompt restores the plain cancel hint', login.view().hint === 'esc cancels the sign-in')
+  check(
+    // The notice from earlier (with its url) is still current, so its hint
+    // wins back over the plain one — clearing a prompt does not forget it.
+    'clearing the prompt falls back to the notice\'s own hint',
+    login.view().hint === 'enter opens the browser  ·  esc cancels the sign-in',
+  )
+
+  login.notice = undefined
+  check(
+    'with no notice and no prompt at all, the hint is the plain cancel',
+    login.view().hint === 'esc cancels the sign-in',
+  )
 
   const loginFrame = frameWith(login.view())
   check('the login panel renders through the real frame', loginFrame.lines.some((line) => line.includes('Claude Pro/Max')))

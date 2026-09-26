@@ -33,10 +33,22 @@ export declare function recordUsage(ledger: UsageLedger, provider: string, promp
 /** Sum every provider's usage into one row, for a grand-total line. */
 export declare function totalUsage(ledger: UsageLedger): ProviderUsage;
 /**
- * Render the ledger as a markdown table for the `/usage` overlay.
+ * The visual half of `/usage`: one bar per provider, each provider's share of
+ * every token spent anywhere, busiest first.
  *
- * Sorted by total tokens descending — the provider actually being used shows
- * up first, rather than in whatever order it happened to enter the ledger.
- * An empty ledger says so instead of printing a table with no rows.
+ * A fenced code block, not prose, because the bars are alignment-sensitive
+ * monospace — the markdown renderer must not reflow or highlight them, only
+ * pass them through. Returns lines rather than a heading-and-all document, so
+ * {@link renderUsage} can fold it into one overlay instead of two.
+ */
+export declare function renderUsageChart(ledger: UsageLedger): string[];
+/**
+ * Render the ledger as a bar chart plus a markdown table for the `/usage`
+ * overlay.
+ *
+ * Sorted by total tokens descending in both — the provider actually being
+ * used shows up first, rather than in whatever order it happened to enter the
+ * ledger. An empty ledger says so instead of printing an empty chart and
+ * table.
  */
 export declare function renderUsage(ledger: UsageLedger): string;

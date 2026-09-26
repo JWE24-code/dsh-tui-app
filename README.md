@@ -372,7 +372,18 @@ were local. Leaving that remote session (its own `/close` or `/exit`, or just
 disconnecting) returns you to the fleet overview here, repainted. This needs
 this process to actually be attached to a terminal on both ends; short of
 that (piped output, a non-interactive run) it falls back to copying the
-command instead, the same as it always did:
+command instead, the same as it always did.
+
+Handing the terminal to `ssh -t` running a *second, nested copy of this same
+app* is more than `$VISUAL` ever asked of it, and it surfaced two real bugs on
+the way back: a stray `SIGHUP` — a known hazard of a child taking over a tty —
+was read as the terminal itself hanging up and closed the whole app, and a
+diff cache left stale by the handover meant the screen came back blank but for
+the new status line, since it compared against a frame the actual terminal no
+longer had. Both are fixed at the one seam every terminal handover already
+goes through, so `alt+e`'s editor round trip is hardened by the same fix:
+
+```sh
 
 ```sh
 ssh -t laptop 'dsh --profile tui --resume session-…'
@@ -479,7 +490,7 @@ independently.
 
 ## Signing in — Claude Pro/Max, ChatGPT/Codex, and others
 
-`/login` opens a picker over every credential `ctx.authorization` knows how to
+`/providers` opens a picker over every credential `ctx.authorization` knows how to
 obtain — a human-guided sign-in a plain API key cannot replace, because
 getting it means a conversation: open this page, paste that code, pick an
 account. This app adds no provider knowledge of its own; it renders whatever
@@ -496,22 +507,26 @@ preferred listed first). What happens next is whatever that flow asks for,
 rendered as a panel that owns the keyboard until it settles:
 
 ```
- Sign in — Claude Pro/Max
+ Sign in — GitHub Copilot
 
- Continue in your browser
+ Enter this code on the verification page to finish signing in.
 
- Open: https://console.anthropic.com/oauth/authorize?...
+ Open: https://github.com/login/device
  Code: `WXYZ-1234`
 
- esc cancels the sign-in
+ enter opens the browser  ·  esc cancels the sign-in
 ```
 
-A flow that needs an answer — a pasted code, an account to pick from a list —
-prompts for it the same way; `enter` submits, `esc` declines just that
-question if the flow can recover, or withdraws the whole attempt if nothing is
-being asked yet. Success or cancellation lands as an ordinary status line, and
-the stored credential outlives the app: signing in once is enough for every
-session afterward, until you sign out through whatever surface manages that
+`enter` on a bare notice like this one opens its page with the platform's own
+launcher (`xdg-open`/`open`/`start`) rather than leaving you to select and
+copy a URL by hand; the code and page stay on screen once the flow moves on to
+its own question, the way a device-code flow needs them to. A flow that needs
+an answer — that pasted code, an account to pick from a list — prompts for it
+the same way; `enter` submits, `esc` declines just that question if the flow
+can recover, or withdraws the whole attempt if nothing is being asked yet.
+Success or cancellation lands as an ordinary status line, and the stored
+credential outlives the app: signing in once is enough for every session
+afterward, until you sign out through whatever surface manages that
 credential store.
 
 Signing in authenticates the route; it does not by itself add one to `/model`.
@@ -527,7 +542,7 @@ That is a profile-level `dsh-llm-pi-ai` config, the same as any other route
 ```
 
 No `apiKeyEnv` is needed on either — a stored sign-in authenticates its route
-beneath any key configured there, so an empty config is enough once `/login`
+beneath any key configured there, so an empty config is enough once `/providers`
 has run.
 
 ## Color palettes
@@ -637,6 +652,9 @@ kept across a restart the same way the composer history is.
 ```
 **Usage**
 
+anthropic  ████████████████████████████████░░░░░░  71%  54,550
+zai        █████████████░░░░░░░░░░░░░░░░░░░░░░░░░░  29%  22,122
+
 | Provider | Prompt | Completion | Total | Turns |
 | --- | ---: | ---: | ---: | ---: |
 | anthropic | 48,210 | 6,340 | 54,550 | 12 |
@@ -647,10 +665,14 @@ Counted per finished turn, from the tokens each provider itself reported —
 not an estimate, and not a cost, since pricing is not this app's to know.
 ```
 
-Busiest provider first. A turn interrupted before it reported any usage adds
-nothing rather than a phantom zero-token row, so the turn count only ever
-means turns that actually answered. `/usage reset` clears the ledger — there
-is no undo, the same as `/delete`.
+The bar for each provider is its share of every token spent anywhere, not a
+share of the busiest one — two providers within a few points of each other
+read as two bars close in length, not one full bar and a shorter one exaggerating
+the gap. Busiest provider first, in the chart and the table alike. A turn
+interrupted before it reported any usage adds nothing rather than a phantom
+zero-token row, so the turn count only ever means turns that actually
+answered. `/usage reset` clears the ledger — there is no undo, the same as
+`/delete`.
 
 `/jobs` lists what ran or is still running in the background for this session —
 state, elapsed time, and the producer's own detail line — with running jobs
@@ -711,7 +733,7 @@ alongside the app's own:
 | Command | Owner |
 |---|---|
 | `/compact`, and any other plugin command | `ctx.commands` (the Harness registry) |
-| `/new`, `/sessions`, `/close`, `/resume`, `/delete`, `/rename`, `/model`, `/theme`, `/plugins`, `/thinking`, `/tools`, `/usage`, `/export`, `/find`, `/unqueue`, `/interrupt`, `/copy`, `/rewind`, `/fork`, `/tree`, `/jobs`, `/mcp`, `/lang`, `/login`, `/dispatch`, `/fleet`, `/peer`, `/update`, `/help`, `/exit` (`/quit`) | this app |
+| `/new`, `/sessions`, `/close`, `/resume`, `/delete`, `/rename`, `/model`, `/theme`, `/plugins`, `/thinking`, `/tools`, `/usage`, `/export`, `/find`, `/unqueue`, `/interrupt`, `/copy`, `/rewind`, `/fork`, `/tree`, `/jobs`, `/mcp`, `/lang`, `/providers`, `/dispatch`, `/fleet`, `/peer`, `/update`, `/help`, `/exit` (`/quit`) | this app |
 
 Unknown commands are dispatched to `ctx.commands.execute()` and only reported
 as unknown if the registry also rejects them.
@@ -825,7 +847,7 @@ regression still would.
     provider parses the real command line.
   - `dsh --profile tui </dev/null` boots the bundle and exits on the non-TTY
     guard.
-- **31 suites, 1546 assertions**, covering rendering (including a pty round
+- **31 suites, 1560 assertions**, covering rendering (including a pty round
   trip through the real screen, decoder, and frame renderer), streaming
   projection, queueing, steering, persistence, the usage ledger, session
   storage, cross-session search, the panels (including a running sign-in),
@@ -849,7 +871,7 @@ regression still would.
 - **`/mcp` reads, it does not manage.** The MCP client is configured by
   composition, so the pane reports the bridge-prefixed tools that are actually
   mounted and where to declare a server — there is no runtime add/remove.
-- **`/login` knows no provider by name.** It renders whatever `ctx.authorization`
+- **`/providers` knows no provider by name.** It renders whatever `ctx.authorization`
   flows are registered; Claude Pro/Max and ChatGPT/Codex show up once
   `dsh-llm-pi-ai` is mounted, the same as any other OAuth provider it or
   another plugin adds a login for. The service is optional and probed like

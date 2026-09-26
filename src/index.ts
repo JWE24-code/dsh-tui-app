@@ -266,7 +266,7 @@ const BUILTIN_COMMANDS: readonly PaletteCommand[] = [
   { name: 'jobs', args: '[kill <id>]', description: 'Background jobs: what is running and what finished' },
   { name: 'mcp', args: '', description: 'MCP servers whose tools are mounted here' },
   { name: 'lang', args: '[en|zh-CN]', description: 'Interface language' },
-  { name: 'login', args: '', description: 'Sign in to a provider — Claude Pro/Max, ChatGPT/Codex, and others' },
+  { name: 'providers', args: '', description: 'Sign in to a provider — Claude Pro/Max, ChatGPT/Codex, and others' },
   {
     name: 'dispatch',
     args: '<device> <task>',
@@ -439,9 +439,9 @@ class TuiApp {
   private pendingLoginPrompt: { resolve: (value: string) => void; reject: (error: unknown) => void } | undefined
   /** Withdraws the sign-in a {@link LoginPanel} is running, if one is. */
   private loginAbort: AbortController | undefined
-  /** What `/login` last listed, indexed the same way its picker rows are. */
+  /** What `/providers` last listed, indexed the same way its picker rows are. */
   private loginEntries: readonly AuthorizationEntry[] = []
-  /** The flow `/login` is choosing a method for, between the two pickers. */
+  /** The flow `/providers` is choosing a method for, between the two pickers. */
   private loginPendingEntry: AuthorizationEntry | undefined
   /** Modal vim editing for the composer, off unless `--vim` asked for it at launch. */
   private readonly vim = new Vim()
@@ -776,10 +776,18 @@ class TuiApp {
         case 'enter': {
           const value = panel.answer()
           const pending = this.pendingLoginPrompt
-          if (value === undefined || pending === undefined) break
-          panel.setPrompt(undefined)
-          this.pendingLoginPrompt = undefined
-          pending.resolve(value)
+          if (value !== undefined && pending !== undefined) {
+            panel.setPrompt(undefined)
+            this.pendingLoginPrompt = undefined
+            pending.resolve(value)
+            break
+          }
+          // No question waiting: enter on a notice with a page to open opens
+          // it, rather than typing the URL out for a human to click or copy.
+          const url = panel.notice?.url
+          if (url !== undefined) {
+            this.setStatus(openUrlWithLocalHelper(url) ? `opened ${url}` : `could not open a browser — copy it yourself: ${url}`)
+          }
           break
         }
         case 'esc':
@@ -1019,16 +1027,50 @@ class TuiApp {
 
   /** Restore the terminal even when the process is killed from outside. */
   private installSignalHandlers(): void {
-    const onSignal = (): void => {
-      this.stop()
-      this.exit(0)
-    }
-    process.once('SIGTERM', onSignal)
-    process.once('SIGHUP', onSignal)
+    process.on('SIGTERM', this.onHangupOrTerminate)
+    process.on('SIGHUP', this.onHangupOrTerminate)
     this.disposers.push(() => {
-      process.off('SIGTERM', onSignal)
-      process.off('SIGHUP', onSignal)
+      process.off('SIGTERM', this.onHangupOrTerminate)
+      process.off('SIGHUP', this.onHangupOrTerminate)
     })
+  }
+
+  /** Bound once so {@link installSignalHandlers} and a terminal handover can add and remove the same listener. */
+  private readonly onHangupOrTerminate = (): void => {
+    this.stop()
+    this.exit(0)
+  }
+
+  /**
+   * Give a child process the terminal for the duration of `run`, the way
+   * `$VISUAL`/`$EDITOR` and an attached remote session both need to.
+   *
+   * SIGHUP is ignored for the duration. A child that takes over the tty — ssh
+   * allocating a remote pty is the known case — can leave the terminal's
+   * controlling-process bookkeeping in a state that delivers a stray SIGHUP to
+   * *this* process once the child exits, and without this guard that read as
+   * the terminal itself hanging up: `installSignalHandlers` tore the whole app
+   * down, which looked exactly like an unwanted restart from a fleet attach
+   * that in fact ended cleanly. A real disconnect still ends the child (ssh's
+   * own pipe breaks), which surfaces as an ordinary exit code here instead.
+   */
+  private async withTerminalHandedOver<T>(run: () => Promise<T>): Promise<T> {
+    process.off('SIGHUP', this.onHangupOrTerminate)
+    this.screen.stop()
+    try {
+      return await run()
+    } finally {
+      this.screen.start()
+      // `start()` clears the real terminal, but the diff cache does not know
+      // that: left alone, the next paint compares against frame content that
+      // is still sitting in memory from before the child took over, decides
+      // most of it is unchanged, and skips writing it — leaving everything
+      // but whatever actually changed sitting on a blank screen. Observed
+      // live: an editor spawn that failed came back to a screen with nothing
+      // on it but the new status line.
+      this.screen.invalidate()
+      process.on('SIGHUP', this.onHangupOrTerminate)
+    }
   }
 
   /** Project the live assistant stream into the transcript. */
@@ -1696,24 +1738,25 @@ class TuiApp {
    * remote session is driven exactly like a local one — the same keys, the
    * same screen — instead of read off a copied command in another window.
    *
-   * Mirrors {@link editDraft}: the alternate screen is given up for the
-   * duration and repainted on return. Falls back to the old copy-to-clipboard
-   * behavior when this process is not attached to a real terminal on both
-   * ends, since there is then nothing to hand over.
+   * Mirrors {@link editDraft} via {@link withTerminalHandedOver}: the
+   * alternate screen is given up for the duration and repainted on return.
+   * Falls back to the old copy-to-clipboard behavior when this process is not
+   * attached to a real terminal on both ends, since there is then nothing to
+   * hand over.
    */
   private async attachRemoteSession(session: FleetSession): Promise<void> {
     if (!Screen.isInteractive()) {
       this.copyJumpCommand(session)
       return
     }
-    this.screen.stop()
-    const code = await new Promise<number>((resolve) => {
-      const child = spawn('ssh', jumpArgv(session), { stdio: 'inherit' })
-      child.on('error', () => resolve(-1))
-      child.on('exit', (exitCode) => resolve(exitCode ?? 0))
-    })
-    this.screen.start()
-    this.screen.invalidate()
+    const code = await this.withTerminalHandedOver(
+      () =>
+        new Promise<number>((resolve) => {
+          const child = spawn('ssh', jumpArgv(session), { stdio: 'inherit' })
+          child.on('error', () => resolve(-1))
+          child.on('exit', (exitCode) => resolve(exitCode ?? 0))
+        }),
+    )
     this.setStatus(
       code === 0 ? `back from ${session.host}` : `ssh to ${session.host} exited (${String(code)})`,
       code !== 0,
@@ -2945,10 +2988,11 @@ class TuiApp {
   /**
    * Round-trip the draft through `$VISUAL`/`$EDITOR`.
    *
-   * The screen leaves the alternate buffer for the duration — the editor owns
-   * the terminal — and comes back with the frame repainted. A non-zero exit
-   * keeps the draft untouched (the `:cq` convention), and neither variable
-   * being set is a status line, not a `vi` fallback nobody asked for.
+   * {@link withTerminalHandedOver} gives the editor the terminal for the
+   * duration — the alternate screen is left and the frame comes back
+   * repainted on return. A non-zero exit keeps the draft untouched (the `:cq`
+   * convention), and neither variable being set is a status line, not a `vi`
+   * fallback nobody asked for.
    */
   private async editDraft(): Promise<void> {
     const editor = process.env['VISUAL'] ?? process.env['EDITOR']
@@ -2959,15 +3003,17 @@ class TuiApp {
     }
     const file = join(tmpdir(), `moqi-draft-${String(process.pid)}.md`)
     await writeFile(file, `${this.composer.value()}\n`)
-    this.screen.stop()
     try {
-      const code = await new Promise<number>((resolve, reject) => {
-        const child = spawn(editor, [file], { stdio: 'inherit' })
-        child.on('error', reject)
-        child.on('exit', (exitCode) => {
-          resolve(exitCode ?? 0)
-        })
-      })
+      const code = await this.withTerminalHandedOver(
+        () =>
+          new Promise<number>((resolve, reject) => {
+            const child = spawn(editor, [file], { stdio: 'inherit' })
+            child.on('error', reject)
+            child.on('exit', (exitCode) => {
+              resolve(exitCode ?? 0)
+            })
+          }),
+      )
       if (code === 0) {
         const edited = (await readFile(file, 'utf8')).replace(/\n$/, '')
         this.composer.setValue(edited)
@@ -2980,7 +3026,6 @@ class TuiApp {
       this.setStatus(describeError(error), true)
     } finally {
       await unlink(file).catch(() => {})
-      this.screen.start()
       this.updateAtMenu()
       this.paint()
     }
@@ -3338,7 +3383,7 @@ class TuiApp {
         return
       }
 
-      case 'login': {
+      case 'providers': {
         const auth = this.ctx.get('authorization')
         if (auth === undefined) {
           this.setStatus('this profile has no authorization service', true)
@@ -3780,7 +3825,7 @@ class TuiApp {
   // ------------------------------------------------------------------ login
 
   /**
-   * `enter` on the `/login` list: a single-method flow starts right away, one
+   * `enter` on the `/providers` list: a single-method flow starts right away, one
    * offering a choice of methods opens a second, small picker for it first.
    */
   private chooseLoginEntry(id: string): void {
@@ -4520,6 +4565,30 @@ function copyWithLocalHelper(text: string): boolean {
     }
   }
   return false
+}
+
+/**
+ * Open a URL with whatever the platform's own launcher is.
+ *
+ * `xdg-open`/`open`/`start` all fork the real browser and return once the
+ * request is handed off, not once the browser is actually up — a `spawnSync`
+ * here does not stall the app waiting on one. Output is discarded the same
+ * way the clipboard helper's is: the launcher must never inherit our
+ * raw-mode stdio.
+ */
+function openUrlWithLocalHelper(url: string): boolean {
+  const [command, args]: [string, string[]] =
+    process.platform === 'darwin'
+      ? ['open', [url]]
+      : process.platform === 'win32'
+        ? ['cmd', ['/c', 'start', '', url]]
+        : ['xdg-open', [url]]
+  try {
+    const run = spawnSync(command, args, { stdio: 'ignore', timeout: 3000 })
+    return run.error === undefined && run.status === 0
+  } catch {
+    return false
+  }
 }
 
 /** A compact "3h ago" label for the picker's right column. */

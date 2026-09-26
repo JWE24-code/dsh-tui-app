@@ -3,7 +3,7 @@
  * the `/usage` overlay from them.
  */
 
-import { recordUsage, renderUsage, totalUsage, type UsageLedger } from '../src/usage.ts'
+import { recordUsage, renderUsage, renderUsageChart, totalUsage, type UsageLedger } from '../src/usage.ts'
 
 let passed = 0
 let failed = 0
@@ -69,6 +69,35 @@ check(
   rendered.indexOf('anthropic') < rendered.indexOf('openai-codex'),
 )
 check('renderUsage never fabricates a dollar figure', !rendered.includes('$'))
+check('renderUsage folds the chart in above the table', rendered.includes('█'))
+
+// ------------------------------------------------------------ renderUsageChart
+
+check('an empty ledger has no chart at all', renderUsageChart({}).length === 0)
+
+const chart = renderUsageChart(ledger).join('\n')
+check('the chart is fenced so the markdown renderer passes it through untouched', chart.startsWith('```') && chart.endsWith('```'))
+check('the chart lists the busier provider', chart.includes('anthropic'))
+check('the chart lists the quieter provider', chart.includes('openai-codex'))
+check(
+  'bars are scaled to share of the grand total, not the busiest provider alone — neither is full here',
+  !chart.includes('█'.repeat(24)),
+)
+check('the chart is sorted busiest first, same as the table', chart.indexOf('anthropic') < chart.indexOf('openai-codex'))
+
+// anthropic is 2300/2900 of the two-provider total ≈ 79%; openai-codex is
+// 600/2900 ≈ 21%. Percentages must reflect share of the grand total, not of
+// the busiest provider (which would read anthropic as 100%).
+const twoProvider = renderUsageChart({
+  anthropic: { promptTokens: 2000, completionTokens: 300, turns: 2 },
+  'openai-codex': { promptTokens: 500, completionTokens: 100, turns: 1 },
+}).join('\n')
+check('the busier provider\'s share is a percentage of the grand total', twoProvider.includes('79%'))
+check('the quieter provider\'s share is a percentage of the grand total', twoProvider.includes('21%'))
+
+const solo = renderUsageChart({ zai: { promptTokens: 10, completionTokens: 5, turns: 1 } }).join('\n')
+check('a single provider is its own whole share: 100%', solo.includes('100%'))
+check('a single provider\'s bar is fully filled', solo.includes('█'.repeat(24)))
 
 if (failed > 0) {
   console.error(`${String(failed)} usage checks failed`)
