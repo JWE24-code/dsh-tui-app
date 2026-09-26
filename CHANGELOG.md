@@ -8,7 +8,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **Fifteen new color palettes.** `/theme` now offers twenty palettes where it
+- **`moqi`, the app's own palette, and the new default.** A Chinese ink
+  painting, which is where the name comes from (墨气): Deep Ink ground, Xuan
+  Paper text, Ink Wash selection and borders, Slate Smoke muted layer, with
+  the accents kept in the same vocabulary — cinnabar warning, indigo-wash
+  accent, celadon/bamboo/ochre semantics — and a light variant that is the
+  same painting on paper. The app now starts on it; anyone with a persisted
+  choice keeps theirs, and `rose-pine` remains in the table as the former
+  default.
+- **Fifteen new color palettes.** `/theme` now offers twenty-one palettes where it
   offered five, spanning the styles the original set did not: pastels
   (Catppuccin), vivid neon (Dracula, Monokai, Synthwave), cool blues
   (Tokyo Night), organic greens (Everforest), editor classics (One, Material,

@@ -559,7 +559,7 @@ switches straight away.
 
 | Theme | |
 |---|---|
-| `rose-pine` | the default — muted purples on a soft ink background |
+| `moqi` | the default — the app's own: ink wash on Deep Ink, cinnabar for warning |
 | `ayu` | warm neutrals, orange accent |
 | `catppuccin` | soft pastels, easy on the eyes (Latte / Mocha) |
 | `contrast` | saturated hues on pure black/white; maximum legibility |
@@ -574,6 +574,7 @@ switches straight away.
 | `one` | Atom's classic; One Light and One Dark |
 | `paper` | a page and one red accent; ink dark twin |
 | `phosphor` | green CRT glow; amber for warnings |
+| `rose-pine` | muted purples on a soft ink background; the former default |
 | `solarized` | Schoonover's balanced pairing |
 | `synthwave` | hot pink on indigo; the outrun sunset |
 | `tokyo-night` | city-night blues; Night dark, Day light |
@@ -594,6 +595,14 @@ either way — so what is left is legible where a hue-based palette is not.
 `contrast` is the other accessibility corner: it keeps the hues but pushes
 each to a saturated extreme against a pure base, and `modus` is the
 middle path — a pair built to published WCAG contrast guarantees.
+
+`moqi` is the app's own and the default: a Chinese ink painting, which is
+where the name comes from (墨气). Deep Ink ground, Xuan Paper text, Ink Wash
+selection and borders, Slate Smoke for the muted layer; the accents stay in
+the same vocabulary — cinnabar for warning, the way a seal stamp carries the
+painter's mark, an indigo wash for the accent, celadon, bamboo, and ochre for
+the semantic slots. The light variant is the same painting on paper: the same
+inks, the accents pressed darker to carry on Xuan.
 
 Where a palette publishes both variants, both are used as published (the
 exceptions are documented in the table: Dracula, Monokai, and Nord have no
@@ -994,7 +1003,7 @@ regression still would.
     provider parses the real command line.
   - `dsh --profile tui </dev/null` boots the bundle and exits on the non-TTY
     guard.
-- **34 suites, 2634 assertions**, covering rendering (including a pty round
+- **34 suites, 2697 assertions**, covering rendering (including a pty round
   trip through the real screen, decoder, and frame renderer), streaming
   projection, queueing, steering, persistence, the usage ledger and its
   colored dashboard, session storage, cross-session search, the panels
