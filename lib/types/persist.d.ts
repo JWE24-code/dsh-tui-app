@@ -1,13 +1,14 @@
 /**
  * Small durable state for the terminal app: composer history, UI
- * preferences, and the sessions that were open, kept as one JSON file under
- * `$DSH_HOME`.
+ * preferences, the sessions that were open, and the usage ledger, kept as one
+ * JSON file under `$DSH_HOME`.
  *
  * Everything here is best-effort by design. The app must run on a read-only
  * or missing home just as well as on a writable one — persistence is a
  * convenience, never a dependency.
  * @module moqi-tui/persist
  */
+import type { UsageEntry, UsageLedger } from './usage.ts';
 /**
  * One session that was open when the app last exited.
  *
@@ -23,6 +24,8 @@ export interface PersistedSession {
     model: string;
     /** The tab's title, normally the opening prompt; empty until one is sent. */
     title: string;
+    /** Color palette that session was using; absent means "use the default". */
+    theme?: string;
 }
 /** What survives a restart of the app. */
 export interface PersistedState {
@@ -34,6 +37,8 @@ export interface PersistedState {
     theme?: string;
     /** Interface language: `en` or `zh-CN`. */
     lang?: string;
+    /** Whether the first-run setup list has been seen; it returns until it has. */
+    setupDone?: boolean;
     /**
      * Whether tool calls were listed rather than summarized when the app last
      * ran; absent means the default, which is to list them.
@@ -45,6 +50,14 @@ export interface PersistedState {
     sessions: PersistedSession[];
     /** Index into {@link PersistedState.sessions} of the tab that was on screen. */
     activeSession: number;
+    /** Per-provider token usage, accumulated across every session so far. */
+    usage: UsageLedger;
+    /**
+     * The rolling-window log `/usage`'s session (5h) and week (7d) views are
+     * computed from — bounded to the last 7 days, unlike `usage` itself, which
+     * never forgets.
+     */
+    usageEntries: UsageEntry[];
 }
 /**
  * How many sessions a single restore will bring back.
@@ -66,6 +79,28 @@ export declare function statePath(env?: NodeJS.ProcessEnv): string;
  * it cannot make sense of yields the fallback, which is always usable.
  */
 export declare function decodeState(raw: string): PersistedState;
+/**
+ * Assemble the state to write, from the live values the app holds.
+ *
+ * The field list lives here rather than inline in the app because listing it
+ * by hand is exactly how fields get lost: `persistNow` used to rebuild the
+ * object itself, and every field it forgot — `lang` and `setupDone` were both
+ * dropped this way — was written as absent on every save no matter what the
+ * app had set. One list, in one place, exercised by a test.
+ */
+export declare function assembleState(input: {
+    inputHistory: string[];
+    thinking: boolean;
+    theme: string;
+    lang: string;
+    setupDone: boolean | undefined;
+    expandTools: boolean | undefined;
+    peers: string[];
+    sessions: PersistedSession[];
+    activeSession: number;
+    usage: UsageLedger;
+    usageEntries: UsageEntry[];
+}): PersistedState;
 /**
  * Read the persisted state, returning the fallback when there is none or it
  * cannot be understood.

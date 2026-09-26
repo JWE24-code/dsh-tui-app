@@ -183,6 +183,9 @@ export type PickerKind =
   | 'rewind'
   | 'stored'
   | 'lang'
+  | 'login'
+  | 'login-method'
+  | 'setup'
   | 'none'
 
 /** One row in the picker. */

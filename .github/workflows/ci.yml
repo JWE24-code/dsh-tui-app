@@ -48,3 +48,38 @@ jobs:
       - run: npm ci
       - run: npm run link-types
       - run: npm run typecheck
+
+  # Commit metadata is the one place a personal address can leak without ever
+  # appearing in a file: an editor or a machine with a work or personal
+  # `user.email` writes it into every commit it creates, and review never shows
+  # it. Only the commits a push or pull request adds are checked — the history
+  # already published would fail forever, and a gate that is always red is a
+  # gate everyone learns to ignore.
+  identity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The range spans commits that may predate this checkout.
+          fetch-depth: 0
+      - name: Check commit identities
+        run: |
+          # On a pull request, `github.sha` is the merge commit GitHub
+          # synthesises for the PR, and that commit carries the account's
+          # email rather than the author's — checking it would fail on
+          # something no commit here can change. The branch tip is what the
+          # author actually wrote.
+          if [ -n "${{ github.event.pull_request.head.sha }}" ]; then
+            range="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
+          else
+            base="${{ github.event.before }}"
+            if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+              # A branch's first push reports an all-zero "before"; there is
+              # no parent to compare against, so the new tip is the range.
+              range="${{ github.sha }}~1..${{ github.sha }}"
+            else
+              range="$base..${{ github.sha }}"
+            fi
+          fi
+          echo "checking commit identities in $range"
+          node scripts/check-commit-identity.mjs "$range"

@@ -13,6 +13,16 @@ export interface Key {
     name: string;
     /** Printable text this key contributes, if any. */
     text: string;
+    /**
+     * Screen cell a mouse event landed on, 0-indexed. Present only on the keys
+     * a mouse produces (`click`, `wheelup`, `wheeldown`) — a click is useless
+     * without its target, and the wheel carries one so a later region-aware
+     * wheel needs no second parser.
+     */
+    mouse?: {
+        column: number;
+        row: number;
+    };
 }
 /**
  * Decode a buffer into keys, returning the keys and any trailing bytes that

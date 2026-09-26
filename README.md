@@ -116,11 +116,13 @@ npm run typecheck
 | `--model <name>` | Model to select for this run |
 | `--thinking` | Start with reasoning output visible |
 | `--context-limit <n>` | Override the context budget; the default is the model's own capacity |
-| `--mouse` | Report mouse events so the wheel scrolls (costs terminal text selection) |
+| `--mouse` | Report mouse events; the default now, and accepted so an alias that passes it keeps working |
+| `--no-mouse` | Disable mouse reporting; the wheel scrolls and the tab bar clicks by default, and shift selects text for the terminal |
 | `--no-bell` | Stay silent when a session finishes |
+| `--vim` | Modal vim editing in the composer: `esc` for normal mode, `i` to insert |
 | `--peer <host>` | Device to include in the fleet overview; repeatable |
 | `--no-restore` | Start with one empty session instead of reopening the last ones |
-| `--version` | Print the app version — shadowed by the launcher's own `--version`, so use `/about` inside the app |
+| `--version` | Print the app version |
 
 `MOQI_CONTEXT_LIMIT` sets the same budget; `MOQI_THEME=light\|dark`
 overrides background detection; `NO_COLOR` disables styling.
@@ -131,7 +133,7 @@ overrides background detection; `NO_COLOR` disables styling.
 |---|---|
 | `enter` | Send · steers into a running reply · `ctrl+j` inserts a newline |
 | `↑` / `↓` | On the first / last composer row, recall earlier prompts |
-| `/` | Command palette · `tab` accepts · `esc` dismisses |
+| `/` | Command palette, 3 rows at a time and scrolling past that · `tab` accepts · `esc` dismisses |
 | `@` | File completion over the workspace · `tab`/`enter` accepts · `esc` dismisses |
 | `?` | Open the key reference on an empty composer |
 | `esc` | Interrupt a streaming reply |
@@ -236,11 +238,14 @@ tries to reconstruct.
 
 ## Scrolling
 
-The app is keyboard-first, so the wheel is **off** by default: terminals
-suppress their own text selection while mouse reporting is on, which is a poor
-trade for a scroll you can do with `pgup`. Pass `--mouse` if you want it.
-Scrolling away from the newest output is announced in the status bar with the
-way back (`ctrl+g`).
+The wheel scrolls the transcript, and a click on a tab in the session bar
+switches to it — mouse reporting is **on** by default, because those two are
+what most people reaching for a mouse actually want. The cost is real but
+small and one-sided: terminals suppress their own text selection while
+reporting is on, so selecting text to copy needs shift held (and the app's own
+`alt+c` / `ctrl+y` copy needs nothing). Pass `--no-mouse` to put selection back
+on plain drag. Scrolling away from the newest output is announced in the
+status bar with the way back (`ctrl+g`).
 
 ## Searching the transcript
 
@@ -260,14 +265,18 @@ truncated to what the terminal is willing to accept.
 
 Two channels are used, because neither is sufficient alone. The OSC 52 escape
 is the one a terminal owns: no dependency, no external process, and it is what
-survives SSH and tmux, where nothing running locally can reach the clipboard
-you are actually looking at. But a Wayland compositor grants clipboard
-ownership only against an input-focus serial, so a terminal can accept a
-perfectly well-formed escape and still leave the selection untouched — the copy
-reports success and nothing is on the clipboard. So when a local helper is
-present (`wl-copy`, `xclip`, `xsel`, `pbcopy`) the text goes there too, and
-that is the one that lands on a desktop. A missing helper is not an error; it
-just leaves OSC 52 to do the job it is good at.
+survives SSH, where nothing running locally can reach the clipboard you are
+actually looking at. Inside tmux or GNU screen the escape is wrapped in that
+multiplexer's own passthrough syntax first — a bare OSC 52 does not reach the
+real terminal through either one on its own, since tmux drops it unless
+`allow-passthrough` happens to be set and screen only ever relays a DCS string
+it recognizes as its own. But a Wayland compositor grants clipboard ownership
+only against an input-focus serial, so a terminal can accept a perfectly
+well-formed escape and still leave the selection untouched — the copy reports
+success and nothing is on the clipboard. So when a local helper is present
+(`wl-copy`, `xclip`, `xsel`, `pbcopy`) the text goes there too, and that is the
+one that lands on a desktop. A missing helper is not an error; it just leaves
+OSC 52 to do the job it is good at.
 
 ## Dictating with your voice
 
@@ -330,6 +339,10 @@ which wins over both.
 Writing is atomic and best-effort: a read-only home means the app runs exactly
 as before, just without recall across restarts.
 
+The `/usage` ledger lives in the same file and survives a restart the same
+way, so a provider's running total is a lifetime one, not a per-session one;
+see [Rate, cache, usage, and background jobs](#rate-cache-usage-and-background-jobs).
+
 ## One list of every device
 
 ```sh
@@ -360,25 +373,41 @@ on a port and no credential is added** — SSH is already the boundary. A record
 that stops being refreshed reads as `stale` rather than claiming forever that
 it is running.
 
-`enter` opens the session when this app already owns it. It cannot open
-anything else — another process has no terminal here — so instead it copies the
-command that does reach it. `p` goes one better for reading: it fetches the
-peer's session log over the same SSH channel and shows the last turns as a
-read-only preview, decoded here. Nothing on the peer is written, nothing new
-listens, and the path is built with the store's own segment encoder, so a
-hostile presence record cannot reach outside its own session directory.
+`enter` switches to the session when this app already owns it. For a remote
+one it hands the terminal to a real `ssh -t`, running that device's `tui`
+profile and resuming the session — the same keys, the same screen, as if it
+were local. Leaving that remote session (its own `/close` or `/exit`, or just
+disconnecting) returns you to the fleet overview here, repainted. This needs
+this process to actually be attached to a terminal on both ends; short of
+that (piped output, a non-interactive run) it falls back to copying the
+command instead, the same as it always did.
 
-`d` dispatches instead of reading: the composer's text is sent to that peer's
-`headless` profile (`--dispatch-profile` changes it), which answers one task and
-exits. The prompt is quoted for the remote shell and SSH runs in `BatchMode`, so
-a password prompt can never swallow the terminal; the peer's answer comes back
-as an overlay, and the session it left behind stays the peer's to resume.
+Handing the terminal to `ssh -t` running a *second, nested copy of this same
+app* is more than `$VISUAL` ever asked of it, and it surfaced two real bugs on
+the way back: a stray `SIGHUP` — a known hazard of a child taking over a tty —
+was read as the terminal itself hanging up and closed the whole app, and a
+diff cache left stale by the handover meant the screen came back blank but for
+the new status line, since it compared against a frame the actual terminal no
+longer had. Both are fixed at the one seam every terminal handover already
+goes through, so `alt+e`'s editor round trip is hardened by the same fix:
 
-The copied command is:
+```sh
 
 ```sh
 ssh -t laptop 'dsh --profile tui --resume session-…'
 ```
+
+`p` goes one better for reading without leaving: it fetches the peer's session
+log over the same SSH channel and shows the last turns as a read-only preview,
+decoded here. Nothing on the peer is written, nothing new listens, and the
+path is built with the store's own segment encoder, so a hostile presence
+record cannot reach outside its own session directory.
+
+`d` dispatches instead of attaching: the composer's text is sent to that peer's
+`headless` profile (`--dispatch-profile` changes it), which answers one task and
+exits. The prompt is quoted for the remote shell and SSH runs in `BatchMode`, so
+a password prompt can never swallow the terminal; the peer's answer comes back
+as an overlay, and the session it left behind stays the peer's to resume.
 
 See [docs/fleet-overview.md](docs/fleet-overview.md) for why presence files
 rather than the session store.
@@ -415,12 +444,18 @@ than one open, a bar appears under the header:
 seen. `alt+1`…`alt+9` jump straight to a session, `alt+n`/`alt+p` cycle,
 `/sessions` opens a picker — which also carries a **+ Ask the harness in a new
 session** entry, so starting one does not depend on already knowing `ctrl+n` —
-and `/close` closes the current one.
+and `/close` closes the current one. `x` on a row in that picker closes *that*
+session without leaving the list, so tidying up several at once is not a
+switch-then-`/close`-then-reopen-the-picker loop; the last session cannot be
+closed this way either, the same guard `/close` already has.
 
 **The bell.** When a session's turn finishes, the terminal bell rings — that is
 the point of running several: you start one, go and do something else, and get
 told when it is done. A session you are already looking at is marked seen
-rather than nagged about. `--no-bell` turns the sound off.
+rather than nagged about. A background job that finishes rings the same bell
+with a status line naming it, and so does a fleet dispatch returning from a
+peer — anything the user has stopped waiting for gets announced, never just
+the turns. `--no-bell` turns the sound off.
 
 ## Background agents
 
@@ -464,17 +499,106 @@ model and context bar always describe the session on screen. A new session
 starts from the model of the session it was opened from, then diverges
 independently.
 
+## Signing in — Claude Pro/Max, ChatGPT/Codex, and others
+
+`/providers` opens a picker over every credential `ctx.authorization` knows how to
+obtain — a human-guided sign-in a plain API key cannot replace, because
+getting it means a conversation: open this page, paste that code, pick an
+account. This app adds no provider knowledge of its own; it renders whatever
+flows are registered, the same way `/plugins` lists whatever packages compose
+the profile. In practice, mounting `@deepseek-ai/dsh-llm-pi-ai` — the same
+adapter a coding-plan route like z.ai's already goes through — is what
+registers a flow for each provider it ships a login for, **Anthropic (Claude
+Pro/Max)** and **OpenAI Codex (ChatGPT Plus/Pro)** included, from the moment
+the plugin mounts, whether or not a route for it is configured yet.
+
+Picking an entry with one method starts it right away; more than one opens a
+second picker for the method first (OAuth, a pasted key, and so on — most
+preferred listed first). What happens next is whatever that flow asks for,
+rendered as a panel that owns the keyboard until it settles:
+
+```
+ Sign in — GitHub Copilot
+
+ Enter this code on the verification page to finish signing in.
+
+ Open: https://github.com/login/device
+ Code: `WXYZ-1234`
+
+ enter opens the browser  ·  esc cancels the sign-in
+```
+
+The page lands on the clipboard the moment the notice does, not only once
+`enter` asks to open it — the terminal you are actually in may not be the
+machine whose browser can reach it (an SSH session, a remote box), and pasting
+it there is the fallback `enter` cannot offer. `enter` on a bare notice like
+this one *also* opens its page with the platform's own launcher
+(`xdg-open`/`open`/`start`), for whichever of the two is faster; the code and
+page stay on screen once the flow moves on to its own question, the way a
+device-code flow needs them to. A flow that needs an answer — that pasted
+code, an account to pick from a list — prompts for it the same way; `enter`
+submits, `esc` declines just that question if the flow can recover, or
+withdraws the whole attempt if nothing is being asked yet. Success or
+cancellation lands as an ordinary status line, and the stored credential
+outlives the app: signing in once is enough for every session afterward,
+until you sign out through whatever surface manages that credential store.
+
+Signing in authenticates the route; it does not by itself add one to `/model`.
+That is a profile-level `dsh-llm-pi-ai` config, the same as any other route
+(see its own README for the full field list):
+
+```yaml
+- name: '@deepseek-ai/dsh-llm-pi-ai'
+  config:
+    providers:
+      anthropic: {}
+      openai-codex: {}
+```
+
+No `apiKeyEnv` is needed on either — a stored sign-in authenticates its route
+beneath any key configured there, so an empty config is enough once `/providers`
+has run.
+
+## First run
+
+On a fresh install the app opens with a short setup list: interface language,
+color palette, provider sign-in (`/providers`), and the one shell command
+voice control needs. Each row opens the picker or shows the step it names,
+and closing the list — enter on the last row or `esc` — records that this
+machine has seen it; it never returns unasked.
+
 ## Color palettes
 
 `/theme` opens a picker over the palettes the app ships with; `/theme <name>`
-switches straight away.
+switches straight away. Moving through the picker repaints the whole app in
+the highlighted palette — browsing by arrow key *is* trying it on — and `esc`
+puts back what was in force; `enter` keeps what you landed on. The same
+preview applies to `/lang`. And `/theme <par<Tab>` completes a palette name,
+shared prefix first, then opens the picker; `/lang <par<Tab>` does the same
+for languages.
 
 | Theme | |
 |---|---|
-| `rose-pine` | the default — muted purples on a soft ink background |
+| `moqi` | the default — the app's own: ink wash on Deep Ink, cinnabar for warning |
+| `ayu` | warm neutrals, orange accent |
+| `catppuccin` | soft pastels, easy on the eyes (Latte / Mocha) |
+| `contrast` | saturated hues on pure black/white; maximum legibility |
+| `dracula` | vivid neon on purple; dark canonical, light derived |
+| `everforest` | muted organic greens, low glare |
 | `gruvbox` | warm retro earth tones, medium contrast |
+| `kanagawa` | sumi-e ink wash; wave dark, lotus light |
+| `material` | Android's palette; Darker dark, Lighter light |
+| `modus` | WCAG-contrast-checked pair; Operandi light, Vivendi dark |
+| `monokai` | the classic vivid editor scheme; dark canonical |
 | `nord` | cool arctic blues, low saturation |
+| `one` | Atom's classic; One Light and One Dark |
+| `paper` | a page and one red accent; ink dark twin |
+| `phosphor` | green CRT glow; amber for warnings |
+| `rose-pine` | muted purples on a soft ink background; the former default |
 | `solarized` | Schoonover's balanced pairing |
+| `synthwave` | hot pink on indigo; the outrun sunset |
+| `tokyo-night` | city-night blues; Night dark, Day light |
+| `tomorrow` | muted neutrals; hue as seasoning |
 | `mono` | greyscale, maximum contrast, no color coding at all |
 
 Every palette defines both a light and a dark variant, because *which* palette
@@ -488,16 +612,43 @@ to do and picking one changes nothing.
 keep them, so success and failure no longer differ by color. Nothing in the
 app relies on color alone — a failed tool call prints `✗` and its error text
 either way — so what is left is legible where a hue-based palette is not.
+`contrast` is the other accessibility corner: it keeps the hues but pushes
+each to a saturated extreme against a pure base, and `modus` is the
+middle path — a pair built to published WCAG contrast guarantees.
+
+`moqi` is the app's own and the default: a Chinese ink painting, which is
+where the name comes from (墨气). Deep Ink ground, Xuan Paper text, Ink Wash
+selection and borders, Slate Smoke for the muted layer; the accents stay in
+the same vocabulary — cinnabar for warning, the way a seal stamp carries the
+painter's mark, an indigo wash for the accent, celadon, bamboo, and ochre for
+the semantic slots. The light variant is the same painting on paper: the same
+inks, the accents pressed darker to carry on Xuan.
+
+Where a palette publishes both variants, both are used as published (the
+exceptions are documented in the table: Dracula, Monokai, and Nord have no
+light variant of their own, so one is derived from their hues the same way);
+`paper`, `phosphor`, `synthwave`, and `contrast` are this app's own, built for
+styles no published palette covers — minimal paper, the green CRT, the outrun
+sunset, and maximum-contrast color.
 
 The choice is saved with the rest of the durable state and applied before the
 first frame, so it survives a restart. Switching repaints the whole screen at
 once, since a palette change moves the color of nearly every cell.
 
+The theme is **per session**, the same way the model is: `/theme` in one
+conversation leaves every other tab on the palette it already had, switching
+tabs repaints in whichever one that tab is on, and a new session starts from
+the theme of the one it was opened from rather than the stored default —
+which is still what a session started *without* one, like the very first tab
+of a fresh launch, falls back to. A restored session brings its own theme back
+too; one this build no longer ships (renamed or removed since) falls back to
+the current default instead of leaving the tab on nothing.
+
 ## Vim mode
 
-`/vim` turns the composer modal. It starts in INSERT — enabling vim never
-changes what typing does — and `esc` switches to NORMAL, where the footer shows
-the mode and bare keys follow vim:
+`--vim` at launch turns the composer modal. It starts in INSERT — enabling vim
+never changes what typing does — and `esc` switches to NORMAL, where the
+footer shows the mode and bare keys follow vim:
 
 | NORMAL key | |
 |---|---|
@@ -554,13 +705,146 @@ matching line with its project and speaker, and opens the session on `enter`.
 The store is read-only here; a compressed log on a Node too old to decode it is
 reported as skipped, never as a wrong answer.
 
-## Rate, cache, and background jobs
+## Rate, cache, usage, and background jobs
 
 The footer carries what the provider reports: prompt and completion tokens, the
 context bar, output tokens per second for the last settled turn, and the share
 of the prompt that came from the provider's cache. Each is displayed only when
 it is real — an unmeasurable rate or a cache hit on an empty prompt is omitted
 rather than faked.
+
+That footer is one turn's own numbers, on the session on screen — it says
+nothing about what came before, or what another provider has been spending in
+another tab. `/usage` is a full-screen colored dashboard instead, in two halves:
+what each provider's plan has left, and what this app has actually spent.
+
+```
+ Usage
+
+ Plans & limits
+   DeepSeek
+     balance 55.88 USD (55.88 topped up)  available
+     ✓ off-peak now (half price) — peak resumes in 1d 11h
+     off-peak is also the faster window: less queueing under load
+   z.ai (GLM coding plan) — GLM Coding Lite
+     Session (5h)  ░░░░░░░░░░░░░░░░░░░░░░░░    1%  26/2,000  resets in 3h 45m
+     Week (7d)     ███████████████░░░░░░░░░   62%  6,170/10,000  resets in 4d 5h
+     renews in 64d 10h — 43.2 quarterly
+   Claude (Pro/Max)
+     Session (5h)  █████████████████████░░░   89%  resets in 3h 4m
+     Week (7d)     ██████░░░░░░░░░░░░░░░░░░   25%  resets in 6d 11h
+     week's allowance went to: Claude Code 100%
+
+ Token spend — session (5h)
+   zai       ████████████████████████  100%  16,623  ↑16,616 ↓7 8% cached
+
+ Token spend — week (7d)
+   zai       ████████████████████████  100%  16,623  ↑16,616 ↓7 8% cached
+
+ Token spend — lifetime
+   zai       ████████████████████████  100%  16,623  ↑16,616 ↓7 8% cached
+
+ esc back
+```
+
+### Plans and limits, as the provider reports them
+
+A local tally of tokens cannot say what a plan has left. Only the provider knows
+what a prepaid balance is down to, how much of a 5-hour window is gone, or when
+either resets — so `/usage` asks it, using the credentials already in the
+Harness credential store. Nothing is read from a file here and no secret is ever
+printed: a token goes into an `Authorization` header and nowhere else.
+
+| Route | What it reports | Read with |
+|---|---|---|
+| DeepSeek | prepaid balance, granted vs topped up, availability, peak-window state | `DEEPSEEK_API_KEY` |
+| z.ai | plan tier, 5-hour and weekly credit windows, renewal date and price | `ZAI_API_KEY` |
+| Claude (Pro/Max) | 5-hour session and 7-day week utilization, the provider's own severity per window, which surface spent the week | the sign-in `/providers` stored |
+| OpenAI Codex (ChatGPT) | plan tier, 5-hour and weekly utilization, remaining credits | the sign-in `/providers` stored |
+
+Every probe runs concurrently and every one of them resolves: a provider that is
+unset, down, or slow costs its own block a line of explanation and leaves the
+rest of the pane intact, because the comparison across providers is the whole
+point of it. The pane paints immediately with what it already knows and fills in
+the plan half as answers land. A reading less than a minute old is reused, so
+closing the pane and reopening it to re-check a number answers from memory
+instead of re-hitting every provider.
+
+When a provider states how pressed a window is in its own words, that word
+colors the bar. Anthropic's usage report carries a `severity` per limit —
+`normal`, `warning`, `critical` — and it wins over the local percentage
+thresholds used for providers that only report numbers, because the provider
+knows where the real cliff sits for the plan and model in use; `critical` at 60%
+is red there where a percentage rule would still call it roomy. Anthropic's
+report also names which surfaces spent the week's allowance — Claude Code
+versus chat versus everything else — and the block says so, because "the week
+is nearly spent" only becomes a decision when it says what the week went on.
+
+The Codex report is the least contractual of the four: OpenAI publishes no
+contract for it, and its figures have already moved once — from `x-codex-*`
+response headers to the dedicated path the probe reads now. The parser is
+written to the schema independent reverse-engineered trackers agree on, with
+its one genuine trap handled: Codex states reset moments in Unix *seconds*,
+where every other provider here states milliseconds.
+
+The parsers refuse rather than improvise. A field that is missing or of the wrong
+type yields "could not be read", never a zero dressed up as a measurement —
+which matters more than it sounds: z.ai reports a window's limit in a field
+called `usage` and its consumption in `currentValue`, so the obvious reading of
+that payload would show a plan as fully spent while it was 1% used. The z.ai
+parser matches those two names exactly and cross-checks them against the row's
+own `remaining`, so a future rename surfaces as a refusal instead of silently
+inverting the bars.
+
+DeepSeek's own published peak/off-peak schedule — standard pricing 01:00–04:00
+and 06:00–10:00 UTC on weekdays, half price every other hour including all of
+both weekend days — rides along with its balance, so the pane doubles as a
+reminder of whether the clock favors answering now or waiting. Two separate
+facts are worth stating, because they bite differently: pricing is predictable
+and countdown-able, while throughput is the one that surprises people. DeepSeek
+enforces no per-account request limit and does not reject requests for load; at
+peak it holds the connection open instead, so what you experience is not an
+error but a turn that takes far longer than usual. Chinese public holidays are
+also off-peak by DeepSeek's own page but are not modeled here, for want of a
+holiday calendar to check against.
+
+### Token spend, as the Harness billed it
+
+The bottom half is every provider this app has actually routed a turn to, in
+three rolling windows, kept across a restart the same way the composer history
+is. The numbers are the Harness's own **billed** counts, read from its
+`tokenUsage` session projection: four separately-priced buckets, already
+retry-aware, so a retried attempt counts as the second billed attempt it is.
+
+They are deliberately *not* the footer's `↑`/`↓` pair, which is **context
+pressure** — the size of the prompt the next request would send. Conflating the
+two is a mistake this app made and has since corrected: it used to subtract one
+context size from another and record the difference as spend. That could not be
+right, because context pressure is not cumulative. A turn whose context had
+shrunk since the last one produced a negative difference, clamped to zero, and
+recorded a full prompt's worth of real spend as nothing at all; a turn that
+grew the context recorded a number resembling neither. Bumping the persisted
+state version discards those old figures rather than carrying them forward under
+names that would imply they had ever been right.
+
+**Session (5h)** and **week (7d)** are rolling windows — the same shape
+Anthropic's Claude Pro/Max and z.ai's GLM coding plan both rate-limit on —
+computed from a timestamped log kept alongside the lifetime ledger, pruned
+past 7 days on every write. **Lifetime** never forgets, and its own
+busiest-first order is what keeps a provider's color the same in every section
+it appears in, even the ones it has aged out of. Each bar is that provider's
+share of every token spent *in that window*, not of the busiest provider in
+it — two providers within a few points of each other read as two bars close
+in length, not one full bar and a shorter one exaggerating the gap.
+
+Each row splits prompt from output, because they are priced differently
+everywhere and one total hides which way a route is expensive, and reports the
+share of its prompt tokens the provider served from cache when there is one to
+report — the one figure here you can act on, since a rate that collapses is
+usually a cache that stopped being hit. A turn whose usage could not be read
+adds nothing rather than a phantom zero-token row, and its spend is not lost:
+it lands the next time a reading succeeds. `/usage reset` clears the ledger and
+the rolling-window log alike — there is no undo, the same as `/delete`.
 
 `/jobs` lists what ran or is still running in the background for this session —
 state, elapsed time, and the producer's own detail line — with running jobs
@@ -621,7 +905,7 @@ alongside the app's own:
 | Command | Owner |
 |---|---|
 | `/compact`, and any other plugin command | `ctx.commands` (the Harness registry) |
-| `/new`, `/sessions`, `/close`, `/resume`, `/delete`, `/rename`, `/model`, `/theme`, `/thinking`, `/tools`, `/export`, `/find`, `/unqueue`, `/interrupt`, `/copy`, `/rewind`, `/fork`, `/tree`, `/jobs`, `/about`, `/update`, `/help`, `/exit` (`/quit`) | this app |
+| `/new`, `/sessions`, `/close`, `/resume`, `/delete`, `/rename`, `/model`, `/theme`, `/plugins`, `/thinking`, `/tools`, `/usage`, `/export`, `/find`, `/unqueue`, `/interrupt`, `/copy`, `/rewind`, `/fork`, `/tree`, `/jobs`, `/mcp`, `/lang`, `/providers`, `/dispatch`, `/fleet`, `/peer`, `/update`, `/help`, `/exit` (`/quit`) | this app |
 
 Unknown commands are dispatched to `ctx.commands.execute()` and only reported
 as unknown if the registry also rejects them.
@@ -649,8 +933,10 @@ src/
   index.ts         the app plugin: Harness wiring, key dispatch, commands
   startup.ts       the cmdline provider (--resume/--model/--thinking/...)
   persist.ts       durable history, preferences, and open sessions under $DSH_HOME
+  usage.ts         billed-token ledger, rolling windows, and DeepSeek's peak hours
+  credits.ts       asking each provider what its plan has left (credentials + network)
   sessions-store.ts  session storage paths and deletion under $DSH_HOME
-  version.ts       reads the package version for --version and /about
+  version.ts       reads the package version for --version and /update
   tui/
     screen.ts      raw mode, alternate screen, per-line diffed painting
     keys.ts        escape-sequence decoding, chunk-tolerant
@@ -658,6 +944,9 @@ src/
     state.ts       composer, palette, picker, history, token formatting
     stream.ts      projects assistant-stream chunks onto the transcript
     export.ts      transcript to markdown for /export
+    usage-view.ts  the /usage dashboard: plan limits above, token spend below
+    credits.ts     provider-response parsers and plan drawing, pure and tested
+    osc52.ts       the clipboard escape, wrapped for tmux/screen when one is in the middle
     markdown.ts    markdown to ANSI plus a small syntax highlighter
     text.ts        ANSI-aware width, wrap, truncate
     theme.ts       adaptive palette and SGR styling
@@ -734,10 +1023,12 @@ regression still would.
     provider parses the real command line.
   - `dsh --profile tui </dev/null` boots the bundle and exits on the non-TTY
     guard.
-- **30 suites, 1472 assertions**, covering rendering (including a pty round
+- **34 suites, 2722 assertions**, covering rendering (including a pty round
   trip through the real screen, decoder, and frame renderer), streaming
-  projection, queueing, steering, persistence, session storage, cross-session
-  search, the panels, the plugin seam, i18n, the fleet, and the render cache.
+  projection, queueing, steering, persistence, the usage ledger and its
+  colored dashboard, session storage, cross-session search, the panels
+  (including a running sign-in), the plugin seam, i18n, the fleet, and the
+  render cache.
 - **The boot-to-model turn is now automated, on demand.** `npm run test:live`
   (`MOQI_LIVE=1`) boots `dsh --profile tui` under `script(1)`, types a
   prompt, and asserts that the model's answer reaches a painted frame before
@@ -757,13 +1048,29 @@ regression still would.
 - **`/mcp` reads, it does not manage.** The MCP client is configured by
   composition, so the pane reports the bridge-prefixed tools that are actually
   mounted and where to declare a server — there is no runtime add/remove.
+- **`/providers` knows no provider by name.** It renders whatever `ctx.authorization`
+  flows are registered; Claude Pro/Max and ChatGPT/Codex show up once
+  `dsh-llm-pi-ai` is mounted, the same as any other OAuth provider it or
+  another plugin adds a login for. The service is optional and probed like
+  `ctx.sessionQuery`, so a profile without it reports that plainly instead of
+  the command doing nothing.
 - **Published** to npm as [`moqi-tui`](https://www.npmjs.com/package/moqi-tui).
   Listing on dshfind is the one release step still done by hand.
 
 ## Release steps
 
+Publishing is automated: run the gates below locally, then publish a GitHub
+Release whose tag matches `package.json` (`v0.3.0` for `0.3.0`) and the
+[Publish to npm](.github/workflows/publish.yml) workflow runs them again on a
+clean machine before publishing with provenance. It is triggered by the
+Release rather than by a push, because npm rejects an existing version and a
+workflow that bumped one for you would turn an ordinary merge into a release
+nobody decided on. The one-time npm-side setup — trusted publishing, so no
+long-lived token is stored — and the dry-run path are in
+[`docs/releasing.md`](docs/releasing.md).
+
 ```sh
-npm test              # 30 suites, including the pty round trip
+npm test              # 34 suites, including the pty round trip
 npm run test:live     # a real model turn through the TUI (needs credentials)
 npm run test:package  # packs, installs into a clean prefix + DSH_HOME, boots
 npm run build         # and commit lib/ — see below

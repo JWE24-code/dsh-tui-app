@@ -32,6 +32,13 @@ import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-cmdline'
 import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import {
+  AuthorizationDeclinedError,
+  type AuthorizationEntry,
+  type AuthorizationInteraction,
+  type AuthorizationPrompt,
+} from '@deepseek-ai/dsh-authorization'
+import { credentialKey, credentialRef } from '@deepseek-ai/dsh-credentials'
 
 import { Screen } from './tui/screen.ts'
 import type { Key } from './tui/keys.ts'
@@ -78,9 +85,11 @@ import { decodeLogBytes, parseLogMessages, searchSessions, type SessionHit } fro
 import { encodeSegment, projectKey, sessionsRoot } from './sessions-store.ts'
 import {
   ApprovalPanel,
+  LoginPanel,
   QuestionsPanel,
   interpretApproval,
   type ApprovalDecision,
+  type LoginPrompt,
 } from './tui/panels.ts'
 import { UserQuestionError } from '@deepseek-ai/dsh-user-questions'
 import type { AskUserQuestionAnswer, AskUserQuestionRequest } from '@deepseek-ai/dsh-user-questions'
@@ -92,10 +101,12 @@ import {
   layout,
   maxScrollBack,
   render,
+  tabClickTarget,
   type Snapshot,
   type VoicePhase,
 } from './tui/view.ts'
 import { activeTheme, applyTheme, listThemes } from './tui/theme.ts'
+import { DEFAULT_THEME, findTheme } from './tui/themes.ts'
 import { projectStreamChunk } from './tui/stream.ts'
 import { applyToolEvent } from './tui/tooldetail.ts'
 import { transcriptMarkdown } from './tui/export.ts'
@@ -114,6 +125,7 @@ import {
   writeProfileManifest,
 } from './plugins.ts'
 import {
+  assembleState,
   loadState,
   MAX_RESTORED_SESSIONS,
   restorePlan,
@@ -122,7 +134,31 @@ import {
   type PersistedState,
 } from './persist.ts'
 import { VERSION } from './version.ts'
-import { FleetView, dispatchArgv, isValidPeer, jumpCommand, mergeFleet } from './tui/fleet.ts'
+import {
+  SESSION_MS,
+  WEEK_MS,
+  bucketDelta,
+  isEmptyBuckets,
+  noBuckets,
+  recordUsage,
+  recordUsageEntry,
+  windowUsage,
+  type TokenBuckets,
+  type UsageEntry,
+  type UsageLedger,
+} from './usage.ts'
+import { collectPlans, hasProbe, PlanCache, type CredentialLookup, type Route } from './credits.ts'
+import { UsageView } from './tui/usage-view.ts'
+import {
+  FleetView,
+  dispatchArgv,
+  isValidPeer,
+  jumpArgv,
+  jumpCommand,
+  mergeFleet,
+  type FleetSession,
+} from './tui/fleet.ts'
+import { buildOsc52, wrapForMultiplexer } from './tui/osc52.ts'
 import { PresencePublisher, type PresenceInput } from './presence.ts'
 import { collectFleet, localDshHome, type PeerConfig } from './fleet-sources.ts'
 import {
@@ -150,10 +186,12 @@ export interface Config {
   model?: string
   thinking?: boolean
   contextLimit?: number
-  /** Report mouse events so the wheel scrolls; off by default. */
+  /** Report mouse events so the wheel scrolls and the session bar clicks; on by default. */
   mouse?: boolean
   /** Ring the terminal bell when a session's turn finishes; on by default. */
   bell?: boolean
+  /** Modal vim editing for the composer; off by default. */
+  vim?: boolean
   /**
    * Devices to include in the fleet overview, as anything `ssh` accepts.
    * Empty means the overview shows only this machine.
@@ -179,6 +217,7 @@ export const Config: z<Config> = z.object({
   contextLimit: z.number(),
   mouse: z.boolean(),
   bell: z.boolean(),
+  vim: z.boolean(),
   peers: z.array(z.string()),
   restore: z.boolean(),
   voiceModel: z.string(),
@@ -222,6 +261,7 @@ const BUILTIN_COMMANDS: readonly PaletteCommand[] = [
   },
   { name: 'thinking', args: '', description: "Toggle display of the reasoner's chain-of-thought" },
   { name: 'tools', args: '', description: 'List the tools this agent can call' },
+  { name: 'usage', args: '[reset]', description: 'Token usage by provider, tallied since it was last reset' },
   { name: 'export', args: '[file]', description: 'Write this transcript to a markdown file' },
   {
     name: 'find',
@@ -245,7 +285,7 @@ const BUILTIN_COMMANDS: readonly PaletteCommand[] = [
   { name: 'jobs', args: '[kill <id>]', description: 'Background jobs: what is running and what finished' },
   { name: 'mcp', args: '', description: 'MCP servers whose tools are mounted here' },
   { name: 'lang', args: '[en|zh-CN]', description: 'Interface language' },
-  { name: 'vim', args: '', description: 'Toggle vim modal editing in the composer' },
+  { name: 'providers', args: '', description: 'Sign in to a provider — Claude Pro/Max, ChatGPT/Codex, and others' },
   {
     name: 'dispatch',
     args: '<device> <task>',
@@ -253,7 +293,6 @@ const BUILTIN_COMMANDS: readonly PaletteCommand[] = [
   },
   { name: 'fleet', args: '', description: 'Sessions across every device (ctrl+f)' },
   { name: 'peer', args: '[add|rm <host>]', description: 'Devices the fleet overview reads' },
-  { name: 'about', args: '', description: 'Show version and connection information' },
   { name: 'update', args: '', description: 'Update this package from npm, if a newer one exists' },
   { name: 'help', args: '', description: 'Show keys and commands' },
   { name: 'exit', args: '', description: 'Quit dsh' },
@@ -311,6 +350,18 @@ interface SessionTab {
   cacheWriteTokens: number
   /** Output tokens at the moment the current turn began, for a turn's own rate. */
   turnStartTokens: number
+  /**
+   * This session's cumulative billed usage as of the last turn folded into the
+   * ledger.
+   *
+   * The Harness's `tokenUsage` projection only grows for a given session, so the
+   * movement between this and the next reading is exactly what the turns in
+   * between were billed. That is what makes the ledger's subtraction sound,
+   * where subtracting one *context size* from another — what this app did
+   * before — was measuring a quantity that was never cumulative and could move
+   * either way for reasons that had nothing to do with spend.
+   */
+  billedAtLastFold: TokenBuckets
   /** Output tokens per second for the last settled turn. */
   tps: number
   scrollBack: number
@@ -336,8 +387,14 @@ interface SessionTab {
    * that created it, so `/model` in one conversation never reroutes another.
    */
   selection: ModelSelectionRef
-  /** Label of the model this session is using, for the footer and /about. */
+  /** Label of the model this session is using, for the footer. */
   modelName: string
+  /**
+   * Color palette this session is using. Per tab, the same way the model is:
+   * a new session starts from the theme of the one it was opened from, then
+   * `/theme` in either conversation leaves the other alone.
+   */
+  theme: string
   /** Context capacity resolved for this session's model. */
   contextLimit: number
   /**
@@ -369,6 +426,7 @@ function newTab(id: string): SessionTab {
     cacheReadTokens: 0,
     cacheWriteTokens: 0,
     turnStartTokens: 0,
+    billedAtLastFold: noBuckets(),
     tps: 0,
     scrollBack: 0,
     queued: [],
@@ -377,6 +435,7 @@ function newTab(id: string): SessionTab {
     logSyncedSeq: 0,
     selection: { current: undefined, assembled: undefined },
     modelName: '',
+    theme: DEFAULT_THEME,
     contextLimit: 0,
     background: new Map(),
   }
@@ -409,10 +468,18 @@ class TuiApp {
   /** Index of the transcript turn under selection, if any. */
   private selectedTurn: number | undefined
   /** The trust-surface panel on screen, if any: it owns the keyboard. */
-  private panel: ApprovalPanel | QuestionsPanel | undefined
+  private panel: ApprovalPanel | QuestionsPanel | LoginPanel | undefined
   private readonly pendingApprovals: PendingApproval[] = []
   private readonly pendingQuestions: PendingQuestion[] = []
-  /** Modal vim editing for the composer, off until `/vim` asks for it. */
+  /** The running sign-in's own prompt, when a {@link LoginPanel} is asking one. */
+  private pendingLoginPrompt: { resolve: (value: string) => void; reject: (error: unknown) => void } | undefined
+  /** Withdraws the sign-in a {@link LoginPanel} is running, if one is. */
+  private loginAbort: AbortController | undefined
+  /** What `/providers` last listed, indexed the same way its picker rows are. */
+  private loginEntries: readonly AuthorizationEntry[] = []
+  /** The flow `/providers` is choosing a method for, between the two pickers. */
+  private loginPendingEntry: AuthorizationEntry | undefined
+  /** Modal vim editing for the composer, off unless `--vim` asked for it at launch. */
   private readonly vim = new Vim()
   /** The extension seam other plugins register shortcuts and a status line into. */
   private readonly tuiHost: TuiHost
@@ -451,8 +518,26 @@ class TuiApp {
     peers: [],
     sessions: [],
     activeSession: 0,
+    usage: {},
+    usageEntries: [],
   }
   private persistTimer: NodeJS.Timeout | undefined
+  /** Per-provider token totals across every session, restored on launch. */
+  private usageLedger: UsageLedger = {}
+  /** The rolling-window log `/usage`'s session and week views read from. */
+  private usageEntries: UsageEntry[] = []
+  /** The `/usage` dashboard's own open/closed state and last-drawn data. */
+  private readonly usageView = new UsageView()
+  /** The last provider-plan reading, reused briefly so reopens do not re-probe. */
+  private readonly planCache = new PlanCache()
+  /** What was in force before the themes picker opened a preview, restored on esc. */
+  private previewBaseTheme: string | undefined
+  /** What was in force before the language picker opened a preview, restored on esc. */
+  private previewBaseLang: Lang | undefined
+  /** Last-seen status of each background job, so a finish is observed as a transition. */
+  private jobStatus = new Map<string, string>()
+  /** The background-job watcher's interval. */
+  private jobsTimer: NodeJS.Timeout | undefined
 
   /** The cross-device overview, and what this device publishes to it. */
   private readonly fleet = new FleetView()
@@ -497,6 +582,7 @@ class TuiApp {
     this.config = config
     this.exit = exit
     this.showThinking = config.thinking === true
+    this.vim.setEnabled(config.vim === true)
     this.tuiHost = new TuiHost(ctx)
     this.presence = new PresencePublisher(localDshHome())
     this.screen = new Screen({
@@ -506,7 +592,7 @@ class TuiApp {
       onResize: () => {
         this.paint()
       },
-    }, { mouse: config.mouse === true })
+    }, { mouse: config.mouse !== false })
   }
 
   /** Boot the app: resolve the agent, open the screen, and paint. */
@@ -520,9 +606,16 @@ class TuiApp {
     // Adopt whatever survived the last run before deciding what to show: the
     // composer history and the thinking preference, both best-effort.
     this.persisted = await loadState()
+    this.usageLedger = this.persisted.usage
+    this.usageEntries = this.persisted.usageEntries
     this.history.load(this.persisted.inputHistory)
     if (this.config.thinking === undefined) this.showThinking = this.persisted.thinking
     if (this.persisted.theme !== undefined) applyTheme(this.persisted.theme)
+    // The first tab was constructed before the persisted default was known;
+    // sync it now so a `--resume`/fresh-session boot (which reuses this same
+    // tab rather than replacing it) does not carry the built-in default while
+    // the screen shows the persisted one.
+    this.tab.theme = activeTheme()
     if (this.persisted.lang !== undefined && isLang(this.persisted.lang)) setLanguage(this.persisted.lang)
     if (this.persisted.expandTools !== undefined) this.expandTools = this.persisted.expandTools
     // Flags and remembered devices are one list from here on; a duplicate
@@ -553,7 +646,12 @@ class TuiApp {
       this.tab.title = this.config.resumeSessionId
       this.tab.messages = readHistory(this.tab.agent.session)
       await this.tab.agent.whenIdle()
-    } else if (!(await this.restoreSessions(current))) {
+    } else if (await this.restoreSessions(current)) {
+      // The restored active tab may carry a theme that diverged from the
+      // persisted default in an earlier session; the boot-time apply above
+      // only knew the default, not what this particular tab last used.
+      applyTheme(this.tab.theme)
+    } else {
       const sessionId = brandString<SessionId>(`session-${randomUUID()}`)
       const created = await agents.create({ sessionId, meta: { cwd }, agentOptions, setup })
       this.tab.agent = created.agent
@@ -577,6 +675,12 @@ class TuiApp {
     this.screen.start()
     this.installSignalHandlers()
     this.registerTrustSurfaces()
+    // Five seconds is often enough to notice a finished job without the
+    // watcher itself ever being felt; the interval is unref'd so a wart on
+    // this timer can never keep the process alive at quit.
+    this.jobsTimer = setInterval(() => this.watchJobs(), 5000)
+    this.jobsTimer.unref?.()
+    if (this.persisted.setupDone !== true) this.showSetupWizard()
     this.paint()
   }
 
@@ -727,6 +831,63 @@ class TuiApp {
         return
       }
     }
+    if (panel instanceof LoginPanel) {
+      switch (key.name) {
+        case 'up':
+        case 'ctrl+p':
+          panel.move(-1)
+          break
+        case 'down':
+        case 'ctrl+n':
+          panel.move(1)
+          break
+        case 'enter': {
+          const value = panel.answer()
+          const pending = this.pendingLoginPrompt
+          if (value !== undefined && pending !== undefined) {
+            panel.setPrompt(undefined)
+            this.pendingLoginPrompt = undefined
+            pending.resolve(value)
+            break
+          }
+          // No question waiting: enter on a notice with a page to open opens
+          // it, rather than typing the URL out for a human to click or copy.
+          const url = panel.notice?.url
+          if (url !== undefined) {
+            this.setStatus(openUrlWithLocalHelper(url) ? `opened ${url}` : `could not open a browser — copy it yourself: ${url}`)
+          }
+          break
+        }
+        case 'esc':
+        case 'ctrl+c': {
+          const pending = this.pendingLoginPrompt
+          if (pending !== undefined) {
+            // A question the flow can recover from: decline just this one,
+            // the same "no" a human gives to any single question.
+            panel.setPrompt(undefined)
+            this.pendingLoginPrompt = undefined
+            pending.reject(new AuthorizationDeclinedError())
+          } else {
+            // Nothing waiting on an answer: esc/ctrl+c withdraws the whole
+            // attempt instead. `begin()` still has to settle asynchronously,
+            // so the panel closes once that promise resolves, not here.
+            this.setStatus('cancelling…')
+            this.loginAbort?.abort()
+          }
+          this.paint()
+          return
+        }
+        case 'backspace':
+          panel.backspaceText()
+          break
+        default:
+          if (key.text !== '') panel.typeText(key.text)
+          break
+      }
+      this.paint()
+      return
+    }
+
     if (panel instanceof ApprovalPanel) {
       switch (key.name) {
         case 'ctrl+v':
@@ -873,6 +1034,14 @@ class TuiApp {
 
     const tab = newTab(session.id)
     tab.title = session.title
+    // A theme this build no longer ships (a renamed or removed one) falls
+    // back to the current default rather than leaving the tab on whatever
+    // `newTab` happened to hardcode.
+    if (session.theme !== undefined && findTheme(session.theme) !== undefined) {
+      tab.theme = session.theme
+    } else {
+      tab.theme = activeTheme()
+    }
     // The model a conversation was switched to belongs to that conversation
     // rather than to the profile, so it comes back per tab instead of from the
     // shared default, which the user may have left pointing somewhere else.
@@ -915,6 +1084,10 @@ class TuiApp {
     if (this.stopped) return
     this.stopped = true
     this.stopSpinner()
+    if (this.jobsTimer !== undefined) {
+      clearInterval(this.jobsTimer)
+      this.jobsTimer = undefined
+    }
     // A recorder left running would keep the microphone open after the app
     // it belonged to is gone, with nothing on screen to say so.
     if (this.voiceRecording !== undefined) this.cancelVoice()
@@ -934,16 +1107,50 @@ class TuiApp {
 
   /** Restore the terminal even when the process is killed from outside. */
   private installSignalHandlers(): void {
-    const onSignal = (): void => {
-      this.stop()
-      this.exit(0)
-    }
-    process.once('SIGTERM', onSignal)
-    process.once('SIGHUP', onSignal)
+    process.on('SIGTERM', this.onHangupOrTerminate)
+    process.on('SIGHUP', this.onHangupOrTerminate)
     this.disposers.push(() => {
-      process.off('SIGTERM', onSignal)
-      process.off('SIGHUP', onSignal)
+      process.off('SIGTERM', this.onHangupOrTerminate)
+      process.off('SIGHUP', this.onHangupOrTerminate)
     })
+  }
+
+  /** Bound once so {@link installSignalHandlers} and a terminal handover can add and remove the same listener. */
+  private readonly onHangupOrTerminate = (): void => {
+    this.stop()
+    this.exit(0)
+  }
+
+  /**
+   * Give a child process the terminal for the duration of `run`, the way
+   * `$VISUAL`/`$EDITOR` and an attached remote session both need to.
+   *
+   * SIGHUP is ignored for the duration. A child that takes over the tty — ssh
+   * allocating a remote pty is the known case — can leave the terminal's
+   * controlling-process bookkeeping in a state that delivers a stray SIGHUP to
+   * *this* process once the child exits, and without this guard that read as
+   * the terminal itself hanging up: `installSignalHandlers` tore the whole app
+   * down, which looked exactly like an unwanted restart from a fleet attach
+   * that in fact ended cleanly. A real disconnect still ends the child (ssh's
+   * own pipe breaks), which surfaces as an ordinary exit code here instead.
+   */
+  private async withTerminalHandedOver<T>(run: () => Promise<T>): Promise<T> {
+    process.off('SIGHUP', this.onHangupOrTerminate)
+    this.screen.stop()
+    try {
+      return await run()
+    } finally {
+      this.screen.start()
+      // `start()` clears the real terminal, but the diff cache does not know
+      // that: left alone, the next paint compares against frame content that
+      // is still sitting in memory from before the child took over, decides
+      // most of it is unchanged, and skips writing it — leaving everything
+      // but whatever actually changed sitting on a blank screen. Observed
+      // live: an editor spawn that failed came back to a screen with nothing
+      // on it but the new status line.
+      this.screen.invalidate()
+      process.on('SIGHUP', this.onHangupOrTerminate)
+    }
   }
 
   /** Project the live assistant stream into the transcript. */
@@ -1199,6 +1406,9 @@ class TuiApp {
     // Looking at it counts as reading it.
     const tab = this.tabs[index]
     if (tab !== undefined && tab.status === 'ready') tab.status = 'idle'
+    // Each session can be on its own palette; switching to one repaints in
+    // its color, not whichever tab last called /theme.
+    if (tab !== undefined) applyTheme(tab.theme)
     // Which tab you were on is part of what a restart should bring back.
     this.persistSoon()
     this.picker.hide()
@@ -1219,6 +1429,8 @@ class TuiApp {
     if (closed?.streaming === true) this.setStatus('closed a session that was still replying')
     if (this.active >= this.tabs.length) this.active = this.tabs.length - 1
     else if (index < this.active) this.active -= 1
+    // Closing a tab can leave a different one active, on its own palette.
+    applyTheme(this.tab.theme)
     // A closed session must not come back on the next launch.
     this.persistSoon()
     this.screen.invalidate()
@@ -1267,6 +1479,7 @@ class TuiApp {
       confirmText: this.confirming ? this.confirmPrompt : undefined,
       searchActive: this.search !== undefined,
       fleet: this.fleet,
+      usage: this.usageView,
       panel: this.panel?.view(),
       selectedTurn: this.selectedTurn,
       pluginLine: this.tuiHost.statusLine(),
@@ -1279,6 +1492,9 @@ class TuiApp {
     if (this.stopped) return
     // Paint is the one funnel every state change already goes through, and
     // publishPresence is a no-op unless the published set actually changed.
+    // It is also the one funnel every picker change reaches, which is what
+    // makes it the right place to keep a picker's live preview honest.
+    this.syncPickerPreview()
     this.publishPresence()
     const frame = render(this.snapshot())
     this.screen.setCursor(frame.cursor)
@@ -1541,6 +1757,183 @@ class TuiApp {
   }
 
   /**
+   * One session's cumulative billed usage, as the Harness's own token meter
+   * accounts for it — or undefined when it cannot be had.
+   *
+   * The `tokenUsage` projection is the only thing in reach that knows what a
+   * provider actually billed: it folds the durable log, counts a retried attempt
+   * as the second billed attempt it is, and reports the four buckets separately
+   * because every provider prices them separately. Nothing else available to this
+   * app can answer that — the stream's own `usage` frames carry the *latest*
+   * request's absolute numbers, which is context pressure, not spend.
+   *
+   * Every failure mode returns undefined rather than a zero: the projection may
+   * not be mounted in a given composition, the session may not be adopted yet,
+   * and a shape this app does not recognize must not be read as "nothing was
+   * billed". A ledger that silently stops recording is recoverable; one that
+   * records confident zeros is not.
+   */
+  private readBilledUsage(tab: SessionTab): TokenBuckets | undefined {
+    const session = tab.agent?.session
+    if (session === undefined) return undefined
+    const projections = this.ctx.get('sessionProjections') as ProjectionReader | undefined
+    if (projections === undefined) return undefined
+    try {
+      const value = projections.snapshot(session, ['tokenUsage']).values['tokenUsage']
+      if (typeof value !== 'object' || value === null) return undefined
+      const record = value as Record<string, unknown>
+      const read = (key: string): number | undefined => {
+        const raw = record[key]
+        return typeof raw === 'number' && Number.isFinite(raw) ? raw : undefined
+      }
+      const uncachedInputTokens = read('uncachedInputTokens')
+      const outputTokens = read('outputTokens')
+      const cacheReadTokens = read('cacheReadTokens')
+      const cacheWriteTokens = read('cacheWriteTokens')
+      if (
+        uncachedInputTokens === undefined ||
+        outputTokens === undefined ||
+        cacheReadTokens === undefined ||
+        cacheWriteTokens === undefined
+      ) {
+        return undefined
+      }
+      return { uncachedInputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }
+    } catch {
+      // A projection read is a convenience; a composition that cannot serve it
+      // must not be able to take a settled turn down with it.
+      return undefined
+    }
+  }
+
+  /**
+   * Fold whatever this session was billed since the last fold into the ledger,
+   * attributed to the provider that answered.
+   *
+   * The baseline advances only when a reading succeeds, so a turn whose usage
+   * could not be read is not lost — its spend is still in the session's
+   * cumulative total and lands in the ledger the next time a reading works,
+   * attributed to whichever provider answered then. That is a deliberate trade:
+   * attribution can smear across a mid-conversation provider switch, which is
+   * rare, in exchange for never dropping spend, which would otherwise be
+   * permanent.
+   */
+  private foldBilledUsage(tab: SessionTab, provider: string): void {
+    const billed = this.readBilledUsage(tab)
+    if (billed === undefined) return
+    const delta = bucketDelta(tab.billedAtLastFold, billed)
+    tab.billedAtLastFold = billed
+    if (isEmptyBuckets(delta)) return
+    this.usageLedger = recordUsage(this.usageLedger, provider, delta)
+    this.usageEntries = recordUsageEntry(this.usageEntries, provider, delta, Date.now())
+  }
+
+  /**
+   * `/usage`: compute the session (5h) and week (7d) rolling windows from the
+   * entry log, then show the dashboard and ask each provider for its plan.
+   *
+   * A snapshot, the same as `/jobs` and `/mcp` are: the pane draws exactly
+   * what was true the moment it opened rather than re-querying the clock on
+   * every repaint, so the countdown it shows stays consistent with the
+   * windows computed alongside it.
+   */
+  private openUsageView(): void {
+    const now = Date.now()
+    const session = windowUsage(this.usageEntries, SESSION_MS, now)
+    const week = windowUsage(this.usageEntries, WEEK_MS, now)
+    this.usageView.setData(session, week, this.usageLedger, now)
+    this.usageView.show()
+    this.picker.hide()
+    this.palette.close()
+    this.setStatus('')
+    // The local half is drawn immediately; the provider half arrives over the
+    // network, so the pane opens with what it already knows rather than holding
+    // a blank screen for however long the slowest provider takes.
+    this.usageView.setPlansPending()
+    this.paint()
+    void this.refreshPlans()
+  }
+
+  /**
+   * Which routes `/usage` should ask about: every provider configured on the LLM
+   * adapter that this app has a plan probe for, plus every provider the ledger
+   * has already attributed a turn to.
+   *
+   * The union is what makes the pane complete. Configuration alone misses a route
+   * reached through a stored sign-in rather than a configured key, and the ledger
+   * alone misses a configured provider that simply has not been used yet — which
+   * is exactly the one a user checks before starting a long job.
+   */
+  private planRoutes(): Route[] {
+    const names = new Map<string, string>()
+    try {
+      for (const provider of this.ctx.get('llm')?.listProviders() ?? []) {
+        if (provider.id !== '') names.set(provider.id, provider.name === '' ? provider.id : provider.name)
+      }
+    } catch {
+      // A provider list this app cannot read is not a reason to show no plans:
+      // the ledger still names every provider that has answered a turn.
+    }
+    for (const provider of Object.keys(this.usageLedger)) {
+      if (!names.has(provider)) names.set(provider, provider)
+    }
+    return [...names.entries()]
+      .filter(([provider]) => hasProbe(provider))
+      .map(([provider, displayName]) => ({ provider, displayName }))
+  }
+
+  /**
+   * Ask every probeable route for its plan and repaint when the answers land.
+   *
+   * Nothing here can reject: `collectPlans` turns every per-provider failure into
+   * that provider's own explanation line, so a provider being down costs one line
+   * rather than the whole pane. The repaint is guarded on the pane still being
+   * open, so answers arriving after the user pressed esc are simply kept for the
+   * next time it opens rather than painting over whatever replaced it.
+   */
+  private async refreshPlans(): Promise<void> {
+    // A reading less than a minute old answers immediately: reopening the pane
+    // to re-check a number should not re-hit every provider. The pending
+    // placeholder this replaced is painted for a frame at most.
+    const cached = this.planCache.get()
+    if (cached !== undefined) {
+      this.usageView.setPlans(cached, Date.now())
+      if (this.usageView.open) this.paint()
+      return
+    }
+    const credentials = this.ctx.get('credentials')
+    if (credentials === undefined) {
+      this.usageView.setPlans([], Date.now())
+      if (this.usageView.open) this.paint()
+      return
+    }
+    const lookup: CredentialLookup = {
+      resolveKey: async (name) => {
+        try {
+          return (await credentials.resolve(credentialRef(name)))?.value
+        } catch {
+          return undefined
+        }
+      },
+      readGrantToken: async (owner, id) => {
+        try {
+          const record = await credentials.readRecord(credentialKey(owner, id))
+          const payload = (record as { payload?: unknown } | undefined)?.payload
+          if (typeof payload !== 'object' || payload === null) return undefined
+          const access = (payload as Record<string, unknown>)['access']
+          return typeof access === 'string' && access !== '' ? access : undefined
+        } catch {
+          return undefined
+        }
+      },
+    }
+    const plans = await collectPlans(this.planRoutes(), lookup)
+    this.planCache.set(plans)
+    this.usageView.setPlans(plans, Date.now())
+    if (this.usageView.open) this.paint()
+  }
+
+  /**
    * Collect from this device and every configured peer.
    *
    * The pane is already on screen when this runs, so a slow or unreachable
@@ -1585,13 +1978,81 @@ class TuiApp {
       this.selectSession(open)
       return
     }
+    if (session.local) {
+      // A local session this app does not have open — another profile's, say.
+      // There is nothing over ssh to attach to, so the old fallback applies.
+      this.fleet.hide()
+      this.copyJumpCommand(session)
+      return
+    }
 
+    this.fleet.hide()
+    void this.attachRemoteSession(session)
+  }
+
+  /** The old behavior: hand over the command instead of running it. */
+  private copyJumpCommand(session: FleetSession): void {
     const command = jumpCommand(session)
     const result = this.writeClipboard(command)
-    this.fleet.hide()
     this.setStatus(result.ok ? `copied: ${command}` : `run: ${command}`)
     this.screen.invalidate()
     this.paint()
+  }
+
+  /**
+   * Hand the terminal to a real `ssh -t` running the remote profile, so a
+   * remote session is driven exactly like a local one — the same keys, the
+   * same screen — instead of read off a copied command in another window.
+   *
+   * Mirrors {@link editDraft} via {@link withTerminalHandedOver}: the
+   * alternate screen is given up for the duration and repainted on return.
+   * Falls back to the old copy-to-clipboard behavior when this process is not
+   * attached to a real terminal on both ends, since there is then nothing to
+   * hand over.
+   */
+  private async attachRemoteSession(session: FleetSession): Promise<void> {
+    if (!Screen.isInteractive()) {
+      this.copyJumpCommand(session)
+      return
+    }
+    let spawnError: string | undefined
+    const code = await this.withTerminalHandedOver(
+      () =>
+        new Promise<number>((resolve) => {
+          const child = spawn('ssh', jumpArgv(session), { stdio: 'inherit' })
+          child.on('error', (error) => {
+            spawnError = describeError(error)
+            resolve(-1)
+          })
+          child.on('exit', (exitCode) => resolve(exitCode ?? 0))
+        }),
+    )
+    if (code === 0) {
+      this.setStatus(`back from ${session.host}`)
+      this.paint()
+      return
+    }
+    // Whatever the remote side printed — a stack trace, "command not found",
+    // a session the store no longer has — was written straight to this
+    // terminal while ssh had it, and then erased the instant the screen
+    // cleared to repaint this app's own frame. A one-line status cannot carry
+    // that back, so the overlay offers the exact command to run outside this
+    // app instead, where nothing will clear it away mid-read.
+    this.showOverlay(
+      [
+        `**Could not attach to ${session.host}**`,
+        '',
+        spawnError !== undefined
+          ? `\`ssh\` did not start: ${spawnError}`
+          : `The remote command exited with status ${String(code)}.`,
+        '',
+        'Its own output was on screen for a moment but is gone now — run the',
+        'same command in a plain terminal to read it in full:',
+        '',
+        `\`${jumpCommand(session)}\``,
+      ].join('\n'),
+      'esc to close',
+    )
   }
 
   private handleFleetKey(key: Key): void {
@@ -1685,6 +2146,20 @@ class TuiApp {
     }
   }
 
+  /** The `/usage` dashboard is read-only: esc/ctrl+c/q are the only keys it answers to. */
+  private handleUsageKey(key: Key): void {
+    switch (key.name) {
+      case 'esc':
+      case 'ctrl+c':
+      case 'q':
+        this.usageView.hide()
+        this.paint()
+        break
+      default:
+        break
+    }
+  }
+
   /**
    * Run a task on a peer's headless profile over the SSH channel.
    *
@@ -1729,6 +2204,9 @@ class TuiApp {
         })
       })
     })
+    // A dispatch outlives attention the same way a background job does, so
+    // its arrival gets the same bell a finished turn gets.
+    this.ring()
     const body = result.out === '' ? '(no output)' : result.out.slice(-8000)
     this.showOverlay(
       `**${device}** · \`${profile}\`\n\n${body}`,
@@ -1873,6 +2351,10 @@ class TuiApp {
         this.handleFleetKey(key)
         return
       }
+      if (this.usageView.open) {
+        this.handleUsageKey(key)
+        return
+      }
       if (this.picker.kind !== 'none') {
         this.handlePickerKey(key)
         return
@@ -1923,6 +2405,7 @@ class TuiApp {
         this.requestQuit()
         return
       case 'esc':
+        if (this.picker.kind === 'setup') this.finishSetup()
         this.picker.hide()
         break
       case 'up':
@@ -1951,6 +2434,23 @@ class TuiApp {
       case 'ctrl+u':
         this.picker.setQuery('')
         break
+      case 'x': {
+        // Only the open-sessions list closes on this key; everywhere else "x"
+        // is an ordinary character narrowing the query, same as any other key.
+        if (this.picker.kind === 'open') {
+          const item = this.picker.current()
+          if (item !== undefined && item.id !== NEW_SESSION_ROW) {
+            const before = this.tabs.length
+            this.closeSession(Number.parseInt(item.id, 10))
+            // Only rebuild the list once the close actually happened — the
+            // last-session guard sets a status this must not clobber.
+            if (this.tabs.length < before) this.showOpenSessions()
+          }
+          break
+        }
+        if (key.text !== '') this.picker.setQuery(this.picker.query + key.text)
+        break
+      }
       case 'enter': {
         const item = this.picker.current()
         const kind = this.picker.kind
@@ -1967,6 +2467,15 @@ class TuiApp {
         else if (kind === 'rewind') void this.performRewind(Number.parseInt(item.id, 10))
         else if (kind === 'stored') void this.openStoredHit(item)
         else if (kind === 'lang') this.selectLanguage(isLang(item.id) ? item.id : 'en')
+        else if (kind === 'setup') {
+          if (item.id === 'lang') void this.runCommand('lang', '')
+          else if (item.id === 'theme') this.showThemes()
+          else if (item.id === 'login') void this.runCommand('providers', '')
+          else if (item.id === 'voice') this.setStatus('run: npm run setup-voice — then ctrl+v in the app')
+          else this.finishSetup()
+        }
+        else if (kind === 'login') this.chooseLoginEntry(item.id)
+        else if (kind === 'login-method') this.beginLoginWithMethod(item.id)
         else void this.openSession(item.id, item.title)
         break
       }
@@ -2080,6 +2589,10 @@ class TuiApp {
         const chosen = this.palette.current()
         if (this.atMenu.open) {
           this.acceptAtCompletion()
+          break
+        }
+        if (chosen === undefined && this.completeCommandArgument()) {
+          this.paint()
           break
         }
         if (chosen !== undefined) {
@@ -2236,6 +2749,18 @@ class TuiApp {
       case 'ctrl+g':
         this.scrollToBottom()
         break
+      case 'click': {
+        // The tab bar is the one region whose contents have stable, meaningful
+        // extents; a click anywhere else is ignored rather than guessed at.
+        // Its row comes from the layout, not from an assumption: the header
+        // above it is conditional, so the bar moves.
+        const cell = key.mouse
+        if (cell === undefined) break
+        const index = tabClickTarget(this.snapshot(), cell)
+        if (index !== undefined) this.selectSession(index)
+        break
+      }
+
       case 'wheelup':
         this.scroll(-3)
         break
@@ -2467,15 +2992,19 @@ class TuiApp {
 
   /** Write the durable state immediately, ignoring a failing backend. */
   private persistNow(): void {
-    this.persisted = {
+    this.persisted = assembleState({
       inputHistory: [...this.history.snapshot()],
       thinking: this.showThinking,
       theme: activeTheme(),
+      lang: currentLanguage(),
+      setupDone: this.persisted.setupDone,
       expandTools: this.expandTools,
       peers: this.peers,
       sessions: this.openSessions(),
       activeSession: this.activeSessionIndex(),
-    }
+      usage: this.usageLedger,
+      usageEntries: this.usageEntries,
+    })
     // Synchronous on purpose: this runs on the quit path, where an async write
     // would be abandoned the moment `exit(0)` tears the process down.
     saveStateSync(this.persisted)
@@ -2491,7 +3020,7 @@ class TuiApp {
   private openSessions(): PersistedSession[] {
     return this.tabs
       .filter((tab) => tab.agent !== undefined)
-      .map((tab) => ({ id: tab.id, model: tab.modelName, title: tab.title }))
+      .map((tab) => ({ id: tab.id, model: tab.modelName, title: tab.title, theme: tab.theme }))
   }
 
   /**
@@ -2634,24 +3163,21 @@ class TuiApp {
    * payload ceiling are the same problem in both places.
    */
   private writeClipboard(text: string): { ok: boolean; truncated: boolean; error?: string } {
-    const encoded = Buffer.from(text, 'utf8').toString('base64')
-    // Cap the payload on the encoded form, kept a multiple of four so it stays
-    // decodable; slicing the content instead would split a surrogate pair and
-    // still overshoot the ceiling by base64's 33% expansion.
-    const cap = 100_000 - (100_000 % 4)
-    const clipped = encoded.length <= cap ? encoded : encoded.slice(0, cap)
+    const { sequence, truncated } = buildOsc52(text)
     try {
-      // `ESC ] 52 ; c ; <base64> ST` — the standard form every mainstream
-      // terminal accepts. Written directly, then the next paint redraws.
-      process.stdout.write(`\u001b]52;c;${clipped}\u001b\\`)
-      // OSC 52 is the only channel that survives SSH and tmux, so it is always
-      // written. It is not sufficient on its own: a Wayland compositor only
-      // lets a window own the clipboard while it holds an input-focus serial,
-      // so the escape can be well-formed, accepted by the terminal, and still
-      // leave the clipboard untouched. Where a local helper exists it is what
-      // actually lands, so it is used as well — same text, last writer wins.
+      // Written directly, then the next paint redraws.
+      process.stdout.write(wrapForMultiplexer(sequence, process.env))
+      // OSC 52 is the only channel that survives SSH, so it is always
+      // written — wrapped for tmux or GNU screen when one is in the middle,
+      // since neither forwards an embedded escape sequence to the real
+      // terminal on its own. It is not sufficient by itself even then: a
+      // Wayland compositor only lets a window own the clipboard while it
+      // holds an input-focus serial, so the escape can be well-formed,
+      // accepted by the terminal, and still leave the clipboard untouched.
+      // Where a local helper exists it is what actually lands, so it is used
+      // as well — same text, last writer wins.
       copyWithLocalHelper(text)
-      return { ok: true, truncated: encoded.length > cap }
+      return { ok: true, truncated }
     } catch (error) {
       return { ok: false, truncated: false, error: describeError(error) }
     }
@@ -2730,23 +3256,6 @@ class TuiApp {
     this.paint()
   }
 
-  /** Show version and connection details in the transcript pane. */
-  private showAbout(): void {
-    this.showOverlay(
-      [
-        '**moqi**',
-        '',
-        `- version \`${VERSION}\``,
-        `- profile \`tui\`  ·  host \`${hostLabel(process.env['DSH_HOST'] ?? 'local harness')}\``,
-        `- model \`${this.tab.modelName}\``,
-        '',
-        'Moqi — the unspoken understanding between you and your harness.',
-        'See the README for the full key and command reference.',
-      ].join('\n'),
-      'esc to close',
-    )
-  }
-
   // --------------------------------------------------------------- behaviors
 
   /**
@@ -2815,10 +3324,11 @@ class TuiApp {
   /**
    * Round-trip the draft through `$VISUAL`/`$EDITOR`.
    *
-   * The screen leaves the alternate buffer for the duration — the editor owns
-   * the terminal — and comes back with the frame repainted. A non-zero exit
-   * keeps the draft untouched (the `:cq` convention), and neither variable
-   * being set is a status line, not a `vi` fallback nobody asked for.
+   * {@link withTerminalHandedOver} gives the editor the terminal for the
+   * duration — the alternate screen is left and the frame comes back
+   * repainted on return. A non-zero exit keeps the draft untouched (the `:cq`
+   * convention), and neither variable being set is a status line, not a `vi`
+   * fallback nobody asked for.
    */
   private async editDraft(): Promise<void> {
     const editor = process.env['VISUAL'] ?? process.env['EDITOR']
@@ -2829,15 +3339,17 @@ class TuiApp {
     }
     const file = join(tmpdir(), `moqi-draft-${String(process.pid)}.md`)
     await writeFile(file, `${this.composer.value()}\n`)
-    this.screen.stop()
     try {
-      const code = await new Promise<number>((resolve, reject) => {
-        const child = spawn(editor, [file], { stdio: 'inherit' })
-        child.on('error', reject)
-        child.on('exit', (exitCode) => {
-          resolve(exitCode ?? 0)
-        })
-      })
+      const code = await this.withTerminalHandedOver(
+        () =>
+          new Promise<number>((resolve, reject) => {
+            const child = spawn(editor, [file], { stdio: 'inherit' })
+            child.on('error', reject)
+            child.on('exit', (exitCode) => {
+              resolve(exitCode ?? 0)
+            })
+          }),
+      )
       if (code === 0) {
         const edited = (await readFile(file, 'utf8')).replace(/\n$/, '')
         this.composer.setValue(edited)
@@ -2850,7 +3362,6 @@ class TuiApp {
       this.setStatus(describeError(error), true)
     } finally {
       await unlink(file).catch(() => {})
-      this.screen.start()
       this.updateAtMenu()
       this.paint()
     }
@@ -2937,6 +3448,13 @@ class TuiApp {
       const turnSeconds = (Date.now() - tab.streamStartedAt) / 1000
       const turnOutput = tab.completionTokens - tab.turnStartTokens
       tab.tps = turnSeconds > 0 && turnOutput > 0 ? turnOutput / turnSeconds : 0
+      // Attribute this turn's own spend to whichever provider actually
+      // answered it — `assembled` is what prompt assembly captured for the
+      // request just settled, which stays correct even though `current`
+      // already points at a switch queued for the next turn.
+      const provider = tab.selection.assembled?.provider ?? tab.selection.current?.provider ?? ''
+      this.foldBilledUsage(tab, provider)
+      this.persistSoon()
       tab.streaming = false
       tab.streamStartedAt = 0
       this.releaseSpinner()
@@ -3172,20 +3690,11 @@ class TuiApp {
         return
       }
 
-      case 'vim': {
-        this.vim.setEnabled(!this.vim.enabled)
-        this.setStatus(
-          this.vim.enabled
-            ? 'vim keys on — esc leaves insert, ctrl+c still interrupts'
-            : 'vim keys off',
-        )
-        this.paint()
-        return
-      }
-
       case 'lang': {
         const wanted = rawInput.trim()
         if (wanted === '') {
+          // The base a cancelled preview returns to; see syncPickerPreview.
+          this.previewBaseLang = currentLanguage()
           this.picker.show(
             'lang',
             'Language',
@@ -3202,6 +3711,36 @@ class TuiApp {
         } else {
           this.setStatus(`unknown language ${wanted} — try en or zh-CN`, true)
         }
+        this.paint()
+        return
+      }
+
+      case 'providers': {
+        const auth = this.ctx.get('authorization')
+        if (auth === undefined) {
+          this.setStatus('this profile has no authorization service', true)
+          this.paint()
+          return
+        }
+        const entries = auth.list()
+        if (entries.length === 0) {
+          this.setStatus('nothing here can be signed into — mount a plugin that offers a login', true)
+          this.paint()
+          return
+        }
+        this.loginEntries = entries
+        this.picker.show(
+          'login',
+          'Sign in',
+          entries.map((entry, index) => ({
+            id: String(index),
+            title: entry.label,
+            subtitle: entry.inFlight
+              ? 'already signing in…'
+              : entry.methods.map((method) => method.label).join(' · '),
+          })),
+        )
+        this.setStatus('')
         this.paint()
         return
       }
@@ -3260,10 +3799,6 @@ class TuiApp {
         return
       }
 
-      case 'about':
-        this.showAbout()
-        return
-
       case 'update':
         void this.selfUpdate()
         return
@@ -3283,6 +3818,20 @@ class TuiApp {
             : `**Tools**\n\n${listed.map((tool) => `- \`${tool}\``).join('\n')}`,
           'esc to close',
         )
+        return
+      }
+
+      case 'usage': {
+        if (rawInput.trim() === 'reset') {
+          this.usageLedger = {}
+          this.usageEntries = []
+          this.usageView.hide()
+          this.persistSoon()
+          this.setStatus('usage ledger reset')
+          this.paint()
+          return
+        }
+        this.openUsageView()
         return
       }
 
@@ -3361,6 +3910,9 @@ class TuiApp {
     const tab = newTab(String(sessionId))
     tab.selection.current = seed
     tab.modelName = String(seed.model)
+    // Same rule as the model just above: the theme of the conversation it was
+    // opened from, not the stored default, then diverges independently.
+    tab.theme = this.tab.theme
 
     try {
       const created = await agents.create({
@@ -3478,6 +4030,7 @@ class TuiApp {
     const carried = this.tab.selection.current
     const sessionId = brandString<SessionId>(`session-${randomUUID()}`)
     const tab = newTab(String(sessionId))
+    tab.theme = this.tab.theme
     if (carried !== undefined) {
       tab.selection.current = carried
       tab.modelName = String(carried.model)
@@ -3599,12 +4152,127 @@ class TuiApp {
 
   /** Switch the interface language and remember it across restarts. */
   private selectLanguage(lang: Lang): void {
+    // Committing a language is the one preview exit that must not restore.
+    this.previewBaseLang = undefined
     setLanguage(lang)
     this.persisted.lang = lang
     this.persistSoon()
     this.screen.invalidate()
     this.setStatus(lang === 'zh-CN' ? '界面语言：简体中文' : 'interface language: English')
     this.paint()
+  }
+
+  // ------------------------------------------------------------------ login
+
+  /**
+   * `enter` on the `/providers` list: a single-method flow starts right away, one
+   * offering a choice of methods opens a second, small picker for it first.
+   */
+  private chooseLoginEntry(id: string): void {
+    const entry = this.loginEntries[Number.parseInt(id, 10)]
+    if (entry === undefined) return
+    const [firstMethod] = entry.methods
+    if (entry.methods.length === 1 && firstMethod !== undefined) {
+      this.beginLogin(entry, firstMethod.id)
+      return
+    }
+    this.loginPendingEntry = entry
+    this.picker.show(
+      'login-method',
+      `Sign in — ${entry.label}`,
+      entry.methods.map((method) => ({ id: method.id, title: method.label, subtitle: '' })),
+    )
+    this.paint()
+  }
+
+  /** `enter` on the method picker a multi-method flow opened. */
+  private beginLoginWithMethod(methodId: string): void {
+    const entry = this.loginPendingEntry
+    this.loginPendingEntry = undefined
+    if (entry !== undefined) this.beginLogin(entry, methodId)
+  }
+
+  /**
+   * Run one `ctx.authorization` attempt, surfacing it as a panel.
+   *
+   * The panel and this app's own pending-prompt bookkeeping are the split
+   * {@link ApprovalPanel} and {@link QuestionsPanel} already keep: the panel is
+   * pure view state, and answering a live question is this method's job,
+   * because that is the one part that actually talks to the Harness.
+   */
+  private beginLogin(entry: AuthorizationEntry, method: string): void {
+    const auth = this.ctx.get('authorization')
+    if (auth === undefined) return
+    const controller = new AbortController()
+    const login = new LoginPanel(entry.label)
+    this.panel = login
+    this.loginAbort = controller
+    this.setStatus('')
+    this.paint()
+
+    const interaction: AuthorizationInteraction = {
+      notify: (notice) => {
+        if (this.panel !== login) return
+        login.notice = notice
+        // The page is on the clipboard the moment it is known, not only once
+        // `enter` asks to open it — the browser to actually use it in may not
+        // be reachable from wherever this terminal is (an SSH session, say),
+        // and pasting it there is the fallback `enter` cannot offer.
+        if (notice.url !== undefined) {
+          const result = this.writeClipboard(notice.url)
+          this.setStatus(result.ok ? `page copied — ${notice.url}` : notice.url)
+        }
+        this.paint()
+      },
+      prompt: (prompt) =>
+        new Promise<string>((resolve, reject) => {
+          if (this.panel !== login) {
+            reject(new Error('the sign-in surface is gone'))
+            return
+          }
+          login.setPrompt(toLoginPrompt(prompt))
+          const pending = { resolve, reject }
+          this.pendingLoginPrompt = pending
+          this.paint()
+          // A flow racing a typed code against a browser callback withdraws
+          // only the losing prompt this way, leaving the attempt running —
+          // this is the browser callback winning, not a human saying no, and
+          // must not reject with AuthorizationDeclinedError: that class means
+          // specifically "the human declined," and a flow that reads it that
+          // way discards the credential it just got through the browser
+          // instead of finishing the commit. A plain rejection is what the
+          // contract asks for here.
+          prompt.signal?.addEventListener('abort', () => {
+            if (this.pendingLoginPrompt !== pending) return
+            this.pendingLoginPrompt = undefined
+            if (this.panel === login) login.setPrompt(undefined)
+            reject(new Error('prompt withdrawn — its own signal aborted'))
+            this.paint()
+          })
+        }),
+    }
+
+    auth
+      .begin({ key: entry.key, method, interaction, signal: controller.signal })
+      .then((outcome) => {
+        this.panel = undefined
+        this.loginAbort = undefined
+        this.pendingLoginPrompt = undefined
+        this.setStatus(
+          outcome.status === 'authorized'
+            ? `signed in — ${entry.label}`
+            : `sign-in cancelled — ${entry.label}`,
+          outcome.status !== 'authorized',
+        )
+        this.paint()
+      })
+      .catch((error: unknown) => {
+        this.panel = undefined
+        this.loginAbort = undefined
+        this.pendingLoginPrompt = undefined
+        this.setStatus(describeError(error), true)
+        this.paint()
+      })
   }
 
   /**
@@ -3625,6 +4293,141 @@ class TuiApp {
       names = []
     }
     this.showOverlay(renderMcp(groupMcpTools(names), names.length), 'esc to close')
+  }
+
+  /**
+   * Keep the pickers that preview on highlight in step with the screen.
+   *
+   * The themes picker repaints the whole app in the highlighted palette as
+   * the cursor moves — browsing 21 palettes by arrow key is the whole point
+   * of having them — and the language picker re-renders the chrome in the
+   * highlighted language for the same reason. Both are previews, not
+   * choices: nothing persists, per-tab bookkeeping is untouched, and leaving
+   * the picker without committing restores what was in force before it
+   * opened. A commit clears the base itself, so the restore here can be
+   * unconditional.
+   */
+  private syncPickerPreview(): void {
+    if (this.picker.kind === 'themes') {
+      const item = this.picker.current()
+      if (item !== undefined && item.id !== activeTheme()) {
+        applyTheme(item.id)
+        this.screen.invalidate()
+      }
+      return
+    }
+    if (this.picker.kind === 'lang') {
+      const item = this.picker.current()
+      if (item !== undefined && isLang(item.id) && item.id !== currentLanguage()) {
+        setLanguage(item.id)
+        this.screen.invalidate()
+      }
+      return
+    }
+    if (this.previewBaseTheme !== undefined) {
+      if (activeTheme() !== this.previewBaseTheme) {
+        applyTheme(this.previewBaseTheme)
+        this.screen.invalidate()
+      }
+      this.previewBaseTheme = undefined
+    }
+    if (this.previewBaseLang !== undefined) {
+      if (currentLanguage() !== this.previewBaseLang) setLanguage(this.previewBaseLang)
+      this.previewBaseLang = undefined
+    }
+  }
+
+  /**
+   * Tab completion for the arguments of the commands whose values the app
+   * already enumerates: `/theme <tab>`, `/lang <tab>`.
+   *
+   * An unambiguous match completes in place; an ambiguous one extends to the
+   * shared prefix and then, pressed again, opens the picker the command
+   * itself opens — completion and browsing should end in the same place.
+   * Returns whether the tab was consumed, so the ordinary meanings of the
+   * key are untouched for every other input.
+   */
+  private completeCommandArgument(): boolean {
+    const text = this.composer.value()
+    if (!text.startsWith('/') || text.includes('\n')) return false
+    const space = text.indexOf(' ')
+    if (space === -1) return false
+    const command = text.slice(1, space)
+    const argument = text.slice(space + 1)
+    if (argument.includes(' ')) return false
+    let candidates: readonly string[] = []
+    let open: (() => void) | undefined
+    if (command === 'theme') {
+      candidates = listThemes().map((theme) => theme.name)
+      open = () => this.showThemes()
+    } else if (command === 'lang') {
+      candidates = LANGS.map((entry) => entry.id)
+      open = () => void this.runCommand('lang', '')
+    } else {
+      return false
+    }
+    const matches = candidates.filter((name) => name.startsWith(argument))
+    if (matches.length === 1 && matches[0] !== argument) {
+      this.composer.setValue(`/${command} ${String(matches[0])} `)
+      this.setStatus('')
+      return true
+    }
+    if (matches.length > 1) {
+      const prefix = matches.reduce((shared, name) => {
+        let end = 0
+        while (end < shared.length && end < name.length && shared[end] === name[end]) end += 1
+        return shared.slice(0, end)
+      })
+      if (prefix.length > argument.length) {
+        this.composer.setValue(`/${command} ${prefix}`)
+        return true
+      }
+      open?.()
+      return true
+    }
+    if (matches.length === 0) {
+      this.setStatus(`no ${command === 'theme' ? 'palette' : 'language'} starts with ${argument}`)
+    }
+    return matches.length !== 0
+  }
+
+  /**
+   * Watch the background-job registry and announce finishes.
+   *
+   * A job outliving the user's attention is the normal case — that is what
+   * running it in the background means — so the app says so with the same
+   * bell a finished turn uses, plus a status line, the moment a job that was
+   * running is seen finished. Only observed transitions announce: a job that
+   * was already finished when the app started (or that this profile's
+   * registry lists without ever having run) stays quiet.
+   */
+  private watchJobs(): void {
+    const registry = this.ctx.get('jobs') as JobRegistryLike | undefined
+    if (registry === undefined) return
+    let jobs: { id: unknown; status: unknown; label: unknown }[]
+    try {
+      jobs = registry.list(this.tab.agent)
+    } catch {
+      return
+    }
+    for (const job of jobs) {
+      if (typeof job.status !== 'string') continue
+      const id = String(job.id)
+      const previous = this.jobStatus.get(id)
+      if (job.status === 'running') {
+        this.jobStatus.set(id, 'running')
+        continue
+      }
+      if (previous === 'running') {
+        this.jobStatus.set(id, job.status)
+        const label = typeof job.label === 'string' ? job.label : ''
+        this.ring()
+        this.setStatus(`background job ${label === '' ? id : label} finished`)
+        this.paint()
+      } else if (previous === undefined) {
+        this.jobStatus.set(id, job.status)
+      }
+    }
   }
 
   /**
@@ -3824,11 +4627,52 @@ class TuiApp {
   }
 
   /**
+   * The first-run setup list, shown once on a fresh install.
+   *
+   * A new user's questions are all of the same shape — which language, which
+   * palette, how do I sign in — and before this existed each answer lived
+   * behind a different command the newcomer had not read about yet. The list
+   * is therefore just doors into the pickers that already answer them, plus
+   * the one setup step that is a shell command. It appears only until it is
+   * dismissed: `enter` on the last row or `esc` records that this machine has
+   * seen it, and it never comes back unasked.
+   */
+  private showSetupWizard(): void {
+    const rows: PickerItem[] = [
+      {
+        id: 'lang',
+        title: 'Interface language',
+        subtitle: LANGS.find((entry) => entry.id === currentLanguage())?.label ?? 'English',
+      },
+      {
+        id: 'theme',
+        title: 'Color palette',
+        subtitle: activeTheme(),
+      },
+      { id: 'login', title: 'Sign in to a provider', subtitle: 'Claude, ChatGPT — /providers' },
+      { id: 'voice', title: 'Set up voice control', subtitle: 'npm run setup-voice' },
+      { id: 'done', title: 'Done', subtitle: 'close this list; it will not return' },
+    ]
+    this.picker.show('setup', 'Set Moqi up', rows)
+    this.setStatus('enter opens a step · esc closes this list for good')
+    this.paint()
+  }
+
+  /** Record that the setup list has been seen and must not return unasked. */
+  private finishSetup(): void {
+    if (this.persisted.setupDone === true) return
+    this.persisted.setupDone = true
+    this.persistSoon()
+  }
+
+  /**
    * Open the palette picker. The rows come straight from the theme table, so
    * a palette added there shows up here with no further wiring.
    */
   private showThemes(): void {
     const current = activeTheme()
+    // The base a cancelled preview returns to; see syncPickerPreview.
+    this.previewBaseTheme = current
     const rows: PickerItem[] = listThemes().map((theme) => ({
       id: theme.name,
       title: theme.name,
@@ -3851,11 +4695,17 @@ class TuiApp {
    * something else happens to touch those rows.
    */
   private selectTheme(name: string): void {
+    // Committing a palette is the one preview exit that must not restore.
+    this.previewBaseTheme = undefined
     if (!applyTheme(name)) {
       this.setStatus(`unknown theme ${name} — /theme lists them`, true)
       this.paint()
       return
     }
+    // This tab's own choice. The app-wide default a brand new session starts
+    // from is still `activeTheme()`, persisted separately below — the two
+    // agree here because this is also the active tab.
+    this.tab.theme = activeTheme()
     this.persistSoon()
     this.setStatus(`theme → ${activeTheme()}`)
     this.screen.invalidate()
@@ -4161,6 +5011,21 @@ interface SessionTitleLike {
   refresh?: (session: Session, signal?: AbortSignal) => Promise<unknown> | unknown
 }
 
+/**
+ * The subset of `ctx.sessionProjections` the usage ledger reads: one consistent
+ * cut over the named units for one session.
+ *
+ * Structural rather than imported, so this app does not take a dependency on the
+ * projection package to read one number out of it, and a composition that does
+ * not mount projections at all is an ordinary `undefined` from `ctx.get` rather
+ * than a load-time failure. The value is deliberately `unknown`: its shape is
+ * the token meter's to define, and {@link TuiApp.readBilledUsage} validates every
+ * field it uses.
+ */
+interface ProjectionReader {
+  snapshot: (session: Session, keys?: readonly string[]) => { values: Record<string, unknown> }
+}
+
 /** The subset of `ctx.sessionQuery` the picker uses, probed defensively. */
 /**
  * The subset of `ctx.jobs` the app calls, probed rather than injected so a
@@ -4251,6 +5116,30 @@ function copyWithLocalHelper(text: string): boolean {
     }
   }
   return false
+}
+
+/**
+ * Open a URL with whatever the platform's own launcher is.
+ *
+ * `xdg-open`/`open`/`start` all fork the real browser and return once the
+ * request is handed off, not once the browser is actually up — a `spawnSync`
+ * here does not stall the app waiting on one. Output is discarded the same
+ * way the clipboard helper's is: the launcher must never inherit our
+ * raw-mode stdio.
+ */
+function openUrlWithLocalHelper(url: string): boolean {
+  const [command, args]: [string, string[]] =
+    process.platform === 'darwin'
+      ? ['open', [url]]
+      : process.platform === 'win32'
+        ? ['cmd', ['/c', 'start', '', url]]
+        : ['xdg-open', [url]]
+  try {
+    const run = spawnSync(command, args, { stdio: 'ignore', timeout: 3000 })
+    return run.error === undefined && run.status === 0
+  } catch {
+    return false
+  }
 }
 
 /** A compact "3h ago" label for the picker's right column. */
@@ -4383,6 +5272,20 @@ function mediaTypeOf(path: string): 'image/png' | 'image/jpeg' | 'image/webp' | 
 function describeError(error: unknown): string {
   if (error instanceof Error) return error.message
   return String(error)
+}
+
+/**
+ * Narrow a Harness `AuthorizationPrompt` to the shape {@link LoginPanel} draws.
+ *
+ * Drops only the prompt's own `signal` — the caller wires that separately,
+ * since `LoginPanel` may depend on nothing from the Harness, abort signals
+ * included.
+ */
+function toLoginPrompt(prompt: AuthorizationPrompt): LoginPrompt {
+  if (prompt.kind === 'select') {
+    return { kind: 'select', message: prompt.message, options: prompt.options }
+  }
+  return { kind: prompt.kind, message: prompt.message, placeholder: prompt.placeholder }
 }
 
 /**

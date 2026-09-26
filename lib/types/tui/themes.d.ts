@@ -51,13 +51,13 @@ export interface Theme {
     colors: ThemePalette;
 }
 /** The name the app starts with when nothing has been chosen or persisted. */
-export declare const DEFAULT_THEME = "rose-pine";
+export declare const DEFAULT_THEME = "moqi";
 /**
  * The colours the exported constants in `theme.ts` are seeded with.
  *
  * They are seeded from the table rather than written out a second time so the
- * default and the `rose-pine` entry cannot drift apart: if they did, `/theme
- * rose-pine` would quietly stop being a way back to how the app started.
+ * default and the `moqi` entry cannot drift apart: if they did, `/theme moqi`
+ * would quietly stop being a way back to how the app started.
  */
 export declare const DEFAULT_PALETTE: ThemePalette;
 /**

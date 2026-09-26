@@ -21,6 +21,7 @@ import { join } from 'node:path'
 import { homedir } from 'node:os'
 
 import {
+  assembleState,
   decodeState,
   loadState,
   MAX_RESTORED_SESSIONS,
@@ -32,13 +33,33 @@ import {
   type PersistedSession,
   type PersistedState,
 } from '../src/persist.ts'
+import type { TokenBuckets } from '../src/usage.ts'
 
 /** The current on-disk version, as the writer stamps it. */
-const VERSION = 2
+const VERSION = 5
+
+/** A bucket set, spelled positionally so a fixture row stays readable. */
+function buckets(uncached: number, output: number, cacheRead = 0, cacheWrite = 0): TokenBuckets {
+  return {
+    uncachedInputTokens: uncached,
+    outputTokens: output,
+    cacheReadTokens: cacheRead,
+    cacheWriteTokens: cacheWrite,
+  }
+}
 
 /** A state with only the fields a case cares about spelled out. */
 function state(partial: Partial<PersistedState> = {}): PersistedState {
-  return { inputHistory: [], thinking: false, peers: [], sessions: [], activeSession: 0, ...partial }
+  return {
+    inputHistory: [],
+    thinking: false,
+    peers: [],
+    sessions: [],
+    activeSession: 0,
+    usage: {},
+    usageEntries: [],
+    ...partial,
+  }
 }
 
 /** A remembered session, defaulting the fields a case is not about. */
@@ -99,7 +120,98 @@ try {
   check('save/load round-trips each session model', tabs.sessions.map((s) => s.model).join(',') === 'model-a,model-b')
   check('save/load round-trips each session title', tabs.sessions.map((s) => s.title).join(',') === 'first,second')
   check('save/load round-trips the active tab', tabs.activeSession === 1)
+  check('a session with no theme saved round-trips to undefined', tabs.sessions[0]?.theme === undefined)
+
+  // ---------------------------------------------- round trip: session theme
+
+  await saveState(
+    state({ sessions: [{ id: 'session-a', model: '', title: '', theme: 'gruvbox' }], activeSession: 0 }),
+    env,
+  )
+  const withTheme = await loadState(env)
+  check('save/load round-trips a session\'s own theme', withTheme.sessions[0]?.theme === 'gruvbox')
+
+  const { writeFile: writeThemeFixture } = await import('node:fs/promises')
+  await writeThemeFixture(
+    statePath(env),
+    JSON.stringify({
+      ...state(),
+      version: VERSION,
+      sessions: [
+        { id: 'session-a', theme: 'nord' },
+        { id: 'session-b', theme: 42 },
+      ],
+    }),
+    'utf8',
+  )
+  const mixedTheme = await loadState(env)
+  check('a well-formed session theme survives', mixedTheme.sessions[0]?.theme === 'nord')
+  check('a non-string session theme reads as undefined rather than throwing', mixedTheme.sessions[1]?.theme === undefined)
   check('the fallback carries no sessions', (await loadState({ DSH_HOME: join(sandbox, 'nothing') })).sessions.length === 0)
+  check('the fallback carries no usage', (await loadState({ DSH_HOME: join(sandbox, 'nothing') })).usage['anthropic'] === undefined)
+
+  // -------------------------------------------------- round trip: usage
+
+  await saveState(
+    state({ usage: { anthropic: { ...buckets(1200, 300, 40, 10), turns: 2 } } }),
+    env,
+  )
+  const withUsage = await loadState(env)
+  check('save/load round-trips a usage row', withUsage.usage['anthropic']?.uncachedInputTokens === 1200)
+  check('save/load round-trips every bucket, not just the prompt side', withUsage.usage['anthropic']?.cacheReadTokens === 40)
+  check('save/load round-trips the turn count', withUsage.usage['anthropic']?.turns === 2)
+
+  const { writeFile: writeUsageFixture } = await import('node:fs/promises')
+  await writeUsageFixture(
+    statePath(env),
+    JSON.stringify({
+      ...state(),
+      version: VERSION,
+      usage: {
+        anthropic: { ...buckets(10, 5), turns: 1 },
+        broken: { ...buckets(10, 5), cacheReadTokens: 'nope', turns: 1 },
+        partial: { uncachedInputTokens: 10, outputTokens: 5, turns: 1 },
+        alsoBroken: 'not even an object',
+      },
+    }),
+    'utf8',
+  )
+  const mixedUsage = await loadState(env)
+  check('a well-formed usage row survives', mixedUsage.usage['anthropic']?.uncachedInputTokens === 10)
+  check('a usage row with a non-numeric field is dropped', mixedUsage.usage['broken'] === undefined)
+  check('a usage row missing a bucket entirely is dropped rather than read as zero', mixedUsage.usage['partial'] === undefined)
+  check('a usage row that is not an object is dropped', mixedUsage.usage['alsoBroken'] === undefined)
+
+  // ---------------------------------------------- round trip: usageEntries
+
+  await saveState(
+    state({ usageEntries: [{ provider: 'anthropic', ...buckets(100, 20, 5), at: 1_700_000_000_000 }] }),
+    env,
+  )
+  const withEntries = await loadState(env)
+  check('save/load round-trips a usage entry', withEntries.usageEntries[0]?.provider === 'anthropic')
+  check('save/load round-trips an entry\'s timestamp', withEntries.usageEntries[0]?.at === 1_700_000_000_000)
+  check('save/load round-trips an entry\'s cache buckets', withEntries.usageEntries[0]?.cacheReadTokens === 5)
+  check('the fallback carries no usage entries', (await loadState({ DSH_HOME: join(sandbox, 'nothing') })).usageEntries.length === 0)
+
+  await writeUsageFixture(
+    statePath(env),
+    JSON.stringify({
+      ...state(),
+      version: VERSION,
+      usageEntries: [
+        { provider: 'anthropic', ...buckets(10, 5), at: 1 },
+        { provider: 'broken', ...buckets(10, 5), outputTokens: 'nope', at: 1 },
+        { ...buckets(10, 5), at: 1 },
+        { provider: 'noBuckets', at: 1 },
+        'not even an object',
+      ],
+    }),
+    'utf8',
+  )
+  const mixedEntries = await loadState(env)
+  check('a well-formed usage entry survives', mixedEntries.usageEntries.length === 1)
+  check('the surviving entry is the well-formed one', mixedEntries.usageEntries[0]?.provider === 'anthropic')
 
   // ------------------------------------------------- unreadable states
 
@@ -289,4 +401,43 @@ try {
 }
 
 // eslint-disable-next-line no-console
+
+// ------------------------------------------------- language & setup flag
+
+// `lang` was written on every save but never read back, quietly resetting the
+// interface to English on every restart; `setupDone` keeps the first-run list
+// from nagging. Both must survive a save/decode round trip.
+{
+  const blank: PersistedState = {
+    inputHistory: [],
+    thinking: false,
+    peers: [],
+    sessions: [],
+    activeSession: 0,
+    usage: {},
+    usageEntries: [],
+  }
+  // Assemble the way the app does, rather than hand-building the object:
+  // the fields were being dropped by the app's own assembly, which a test
+  // that constructs its own input could never have caught.
+  const chosen = assembleState({
+    inputHistory: [],
+    thinking: false,
+    theme: 'moqi',
+    lang: 'zh-CN',
+    setupDone: true,
+    expandTools: undefined,
+    peers: [],
+    sessions: [],
+    activeSession: 0,
+    usage: {},
+    usageEntries: [],
+  })
+  const restored = decodeState(JSON.stringify({ ...chosen, version: VERSION }))
+  check('the language survives a round trip', restored.lang === 'zh-CN')
+  check('the setup-done flag survives a round trip', restored.setupDone === true)
+  const fresh = decodeState(JSON.stringify({ ...blank, version: VERSION }))
+  check('neither field appears when never set', fresh.lang === undefined && fresh.setupDone === undefined)
+}
+
 console.log(`ok - ${String(checks)} checks passed`)

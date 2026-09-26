@@ -3,7 +3,7 @@
  * and plan review. All pure state — the Cordis wiring lives in the app layer.
  */
 import assert from 'node:assert/strict'
-import { ApprovalPanel, QuestionsPanel, interpretApproval, type QuestionSpec } from '../src/tui/panels.ts'
+import { ApprovalPanel, LoginPanel, QuestionsPanel, interpretApproval, type QuestionSpec } from '../src/tui/panels.ts'
 import { render } from '../src/tui/view.ts'
 import { Composer, Palette, Picker } from '../src/tui/state.ts'
 import { displayWidth } from '../src/tui/text.ts'
@@ -211,5 +211,102 @@ check('the cursor is hidden while a panel owns the keyboard', render({
     confirming: false, panel: approval.view(),
   },
 }).cursor === undefined)
+
+// -------------------------------------------------------------- LoginPanel
+
+{
+  const login = new LoginPanel('Claude Pro/Max')
+  check('a fresh panel has no live prompt', login.answer() === undefined)
+  check('the title names the flow', login.view().title === 'Sign in — Claude Pro/Max')
+  check('with nothing yet, esc is the only hint', login.view().hint === 'esc cancels the sign-in')
+
+  login.notice = { message: 'Continue in your browser', url: 'https://example.test/auth', code: 'ABCD-1234' }
+  const withNotice = login.view()
+  check('the notice message is shown', withNotice.detail.includes('Continue in your browser'))
+  check('the notice url is shown', withNotice.detail.includes('https://example.test/auth'))
+  check('the notice code is shown', withNotice.detail.includes('ABCD-1234'))
+  check('a bare notice offers no input line', withNotice.inputLabel === undefined)
+  check(
+    'a notice with a page to open hints that enter opens it',
+    withNotice.hint === 'enter opens the browser  ·  esc cancels the sign-in',
+  )
+
+  const urllessLogin = new LoginPanel('Some Provider')
+  urllessLogin.notice = { message: 'Working…' }
+  check(
+    'a notice with no page keeps the plain cancel hint',
+    urllessLogin.view().hint === 'esc cancels the sign-in',
+  )
+
+  login.setPrompt({ kind: 'text', message: 'Paste the code shown on that page' })
+  const withPromptAfterNotice = login.view()
+  check('a live prompt shows its own question', withPromptAfterNotice.detail.includes('Paste the code shown on that page'))
+  check(
+    // GitHub Copilot's shape: notify the page and the code, then prompt to
+    // confirm — the human still needs the url and code while answering.
+    'a device-code flow keeps its url on screen once the prompt takes over',
+    withPromptAfterNotice.detail.includes('https://example.test/auth'),
+  )
+  check(
+    'a device-code flow keeps its code on screen once the prompt takes over',
+    withPromptAfterNotice.detail.includes('ABCD-1234'),
+  )
+  check(
+    'the notice\'s plain message is not repeated once the prompt has its own',
+    !withPromptAfterNotice.detail.includes('Continue in your browser'),
+  )
+  login.typeText('AB')
+  login.typeText('CD')
+  check('typed text accumulates', login.answer() === 'ABCD')
+  login.backspaceText()
+  check('backspace removes the last character', login.answer() === 'ABC')
+  check('a text prompt echoes the draft in the clear', login.view().inputText === 'ABC')
+  check('a text prompt is focused for input', login.view().inputFocused === true)
+
+  login.setPrompt({ kind: 'secret', message: 'Paste your API key' })
+  login.typeText('sk-secret')
+  check('a secret prompt masks its draft', login.view().inputText === '•'.repeat('sk-secret'.length))
+  check('a secret prompt still answers with the real value', login.answer() === 'sk-secret')
+
+  login.setPrompt({
+    kind: 'select',
+    message: 'Pick an account',
+    options: [
+      { id: 'a', label: 'Account A' },
+      { id: 'b', label: 'Account B', description: 'work' },
+    ],
+  })
+  check('a select prompt starts on the first option', login.answer() === 'a')
+  login.move(1)
+  check('move advances the selection', login.answer() === 'b')
+  login.move(1)
+  check('move clamps at the last option', login.answer() === 'b')
+  login.move(-5)
+  check('move clamps at the first option', login.answer() === 'a')
+  check('typing does nothing to a select prompt', (login.typeText('x'), login.answer() === 'a'))
+  const selectView = login.view()
+  check('a select prompt renders one row per option', selectView.rows.length === 2)
+  check('the highlighted row is marked selected', selectView.rows[0]?.selected === true)
+  check('a select prompt offers no input line', selectView.inputLabel === undefined)
+  check('a select prompt has its own hint', selectView.hint.includes('choose'))
+
+  login.setPrompt(undefined)
+  check('clearing the prompt drops the draft too', login.answer() === undefined)
+  check(
+    // The notice from earlier (with its url) is still current, so its hint
+    // wins back over the plain one — clearing a prompt does not forget it.
+    'clearing the prompt falls back to the notice\'s own hint',
+    login.view().hint === 'enter opens the browser  ·  esc cancels the sign-in',
+  )
+
+  login.notice = undefined
+  check(
+    'with no notice and no prompt at all, the hint is the plain cancel',
+    login.view().hint === 'esc cancels the sign-in',
+  )
+
+  const loginFrame = frameWith(login.view())
+  check('the login panel renders through the real frame', loginFrame.lines.some((line) => line.includes('Claude Pro/Max')))
+}
 
 console.log(`ok - ${String(checks)} panel checks passed`)

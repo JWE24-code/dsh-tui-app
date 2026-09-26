@@ -1,8 +1,10 @@
 /**
- * Trust-surface panels: tool approval, `ask_user_question`, and plan review.
+ * Trust-surface panels: tool approval, `ask_user_question`, plan review, and a
+ * running sign-in.
  *
- * These are the moments the agent stops and asks a human, so they own the
- * keyboard while open and answer through the Harness waterfall seams. Like the
+ * These are the moments something stops and asks a human — the agent, or a
+ * `ctx.authorization` flow doing its own OAuth dance — so they own the
+ * keyboard while open and answer through the Harness's own seams. Like the
  * rest of `tui/`, this module is pure state plus a view shape — the app layer
  * does the Cordis wiring and the renderer does the drawing.
  * @module
@@ -23,11 +25,11 @@ export interface PanelRow {
 /**
  * The panel the renderer draws in place of the transcript.
  *
- * `detail` is markdown: an approval's reason, a question's supporting text, or
- * a plan under review.
+ * `detail` is markdown: an approval's reason, a question's supporting text, a
+ * plan under review, or a sign-in flow's own notice.
  */
 export interface PanelView {
-  kind: 'approval' | 'questions'
+  kind: 'approval' | 'questions' | 'login'
   title: string
   detail: string
   rows: PanelRow[]
@@ -294,6 +296,122 @@ export class QuestionsPanel {
       inputLabel: t('questions.answer'),
       inputText: draft.custom,
       inputFocused: this.focus === 'custom',
+    }
+  }
+}
+
+/** One notice a running `ctx.authorization` flow reported, mid-attempt. */
+export interface LoginNotice {
+  message: string
+  url?: string
+  code?: string
+}
+
+/** One question a running flow needs answered before it can continue. */
+export type LoginPrompt =
+  | { kind: 'text' | 'secret'; message: string; placeholder?: string }
+  | { kind: 'select'; message: string; options: readonly { id: string; label: string; description?: string }[] }
+
+/**
+ * One running `ctx.authorization` attempt, surfaced as a panel.
+ *
+ * Deliberately thin: this tracks only what is on screen — the last notice,
+ * the live prompt if one is waiting, and what has been typed or highlighted
+ * for it. Resolving a prompt is the caller's job, the same split
+ * {@link ApprovalPanel} and {@link QuestionsPanel} keep, because answering one
+ * is a call into the Harness and this module may depend on nothing from it.
+ */
+export class LoginPanel {
+  readonly label: string
+  notice: LoginNotice | undefined
+  prompt: LoginPrompt | undefined
+  private cursor = 0
+  private draft = ''
+
+  constructor(label: string) {
+    this.label = label
+  }
+
+  /**
+   * Put a fresh prompt on screen, or clear it once it has been answered.
+   * Starts from empty every time — a stale draft or highlight from the
+   * question before it must never bleed into this one.
+   */
+  setPrompt(prompt: LoginPrompt | undefined): void {
+    this.prompt = prompt
+    this.draft = ''
+    this.cursor = 0
+  }
+
+  move(delta: number): void {
+    if (this.prompt?.kind !== 'select') return
+    const count = this.prompt.options.length
+    this.cursor = Math.max(Math.min(this.cursor + delta, count - 1), 0)
+  }
+
+  typeText(chunk: string): void {
+    if (this.prompt === undefined || this.prompt.kind === 'select') return
+    this.draft += chunk
+  }
+
+  backspaceText(): void {
+    if (this.prompt === undefined || this.prompt.kind === 'select') return
+    this.draft = this.draft.slice(0, -1)
+  }
+
+  /** What `enter` would answer the live prompt with, or undefined for none waiting. */
+  answer(): string | undefined {
+    const prompt = this.prompt
+    if (prompt === undefined) return undefined
+    return prompt.kind === 'select' ? prompt.options[this.cursor]?.id : this.draft
+  }
+
+  view(): PanelView {
+    const notice = this.notice
+    const prompt = this.prompt
+    const lines: string[] = []
+    // The url and code are what a device-code flow (GitHub Copilot's shape:
+    // notify the page and the code, then prompt to confirm) still needs on
+    // screen once its own prompt takes over — only the notice's plain message
+    // is redundant then, since the prompt speaks for the moment now.
+    if (notice !== undefined) {
+      if (prompt === undefined) lines.push(notice.message)
+      if (notice.url !== undefined) lines.push('', `Open: ${notice.url}`)
+      if (notice.code !== undefined) lines.push('', `Code: \`${notice.code}\``)
+    }
+    if (prompt !== undefined) {
+      if (lines.length > 0) lines.push('')
+      lines.push(prompt.message)
+    }
+    const rows: PanelRow[] =
+      prompt?.kind === 'select'
+        ? prompt.options.map((option, index) => ({
+            label: option.label,
+            description: option.description,
+            selected: index === this.cursor,
+          }))
+        : []
+    const textPrompt = prompt?.kind === 'text' || prompt?.kind === 'secret'
+    // enter opens the page for the caller — this class stays free of the
+    // Harness and npm alike, so it never spawns a browser itself — whenever
+    // there is a page to open and no question is waiting on an answer first.
+    const hint =
+      prompt === undefined
+        ? notice?.url === undefined
+          ? 'esc cancels the sign-in'
+          : 'enter opens the browser  ·  esc cancels the sign-in'
+        : prompt.kind === 'select'
+          ? '↑↓ move  ·  enter choose  ·  esc decline'
+          : 'enter submit  ·  esc decline'
+    return {
+      kind: 'login',
+      title: `Sign in — ${this.label}`,
+      detail: lines.join('\n'),
+      rows,
+      hint,
+      inputLabel: textPrompt ? 'answer' : undefined,
+      inputText: textPrompt ? (prompt.kind === 'secret' ? '•'.repeat(this.draft.length) : this.draft) : undefined,
+      inputFocused: textPrompt,
     }
   }
 }

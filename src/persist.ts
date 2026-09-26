@@ -1,7 +1,7 @@
 /**
  * Small durable state for the terminal app: composer history, UI
- * preferences, and the sessions that were open, kept as one JSON file under
- * `$DSH_HOME`.
+ * preferences, the sessions that were open, and the usage ledger, kept as one
+ * JSON file under `$DSH_HOME`.
  *
  * Everything here is best-effort by design. The app must run on a read-only
  * or missing home just as well as on a writable one — persistence is a
@@ -13,6 +13,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
+import type { ProviderUsage, TokenBuckets, UsageEntry, UsageLedger } from './usage.ts'
 
 /**
  * One session that was open when the app last exited.
@@ -29,6 +30,8 @@ export interface PersistedSession {
   model: string
   /** The tab's title, normally the opening prompt; empty until one is sent. */
   title: string
+  /** Color palette that session was using; absent means "use the default". */
+  theme?: string
 }
 
 /** What survives a restart of the app. */
@@ -41,6 +44,8 @@ export interface PersistedState {
   theme?: string
   /** Interface language: `en` or `zh-CN`. */
   lang?: string
+  /** Whether the first-run setup list has been seen; it returns until it has. */
+  setupDone?: boolean
   /**
    * Whether tool calls were listed rather than summarized when the app last
    * ran; absent means the default, which is to list them.
@@ -52,10 +57,26 @@ export interface PersistedState {
   sessions: PersistedSession[]
   /** Index into {@link PersistedState.sessions} of the tab that was on screen. */
   activeSession: number
+  /** Per-provider token usage, accumulated across every session so far. */
+  usage: UsageLedger
+  /**
+   * The rolling-window log `/usage`'s session (5h) and week (7d) views are
+   * computed from — bounded to the last 7 days, unlike `usage` itself, which
+   * never forgets.
+   */
+  usageEntries: UsageEntry[]
 }
 
-/** Version of the on-disk shape, so a future change can migrate or discard. */
-const STATE_VERSION = 2
+/**
+ * Version of the on-disk shape, so a future change can migrate or discard.
+ *
+ * Bumped to 5 when the usage ledger moved from a two-number `promptTokens`/
+ * `completionTokens` pair to the provider's own four billed buckets. The old
+ * numbers are not convertible: they were differences between context sizes, not
+ * billed totals, so they are discarded rather than carried forward under names
+ * that would imply they had ever been right.
+ */
+const STATE_VERSION = 5
 
 /**
  * How many sessions a single restore will bring back.
@@ -71,7 +92,81 @@ type OnDisk = PersistedState & { version?: number }
 
 /** The state used when there is nothing readable on disk. */
 function fallbackState(): PersistedState {
-  return { inputHistory: [], thinking: false, peers: [], sessions: [], activeSession: 0 }
+  return { inputHistory: [], thinking: false, peers: [], sessions: [], activeSession: 0, usage: {}, usageEntries: [] }
+}
+
+/** A finite number at `key`, or undefined when it is missing or another type. */
+function finite(record: Record<string, unknown>, key: string): number | undefined {
+  const value = record[key]
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+/**
+ * Coerce the four billed buckets, or reject the row outright.
+ *
+ * All four must be present and finite. A row missing one is a row whose total
+ * would silently understate the spend it claims to record, which is worse than
+ * no row at all.
+ */
+function readBuckets(record: Record<string, unknown>): TokenBuckets | undefined {
+  const uncachedInputTokens = finite(record, 'uncachedInputTokens')
+  const outputTokens = finite(record, 'outputTokens')
+  const cacheReadTokens = finite(record, 'cacheReadTokens')
+  const cacheWriteTokens = finite(record, 'cacheWriteTokens')
+  if (
+    uncachedInputTokens === undefined ||
+    outputTokens === undefined ||
+    cacheReadTokens === undefined ||
+    cacheWriteTokens === undefined
+  ) {
+    return undefined
+  }
+  return { uncachedInputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }
+}
+
+/** Coerce one on-disk usage row, or reject it outright. */
+function readUsageRow(value: unknown): ProviderUsage | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const record = value as Record<string, unknown>
+  const buckets = readBuckets(record)
+  const turns = finite(record, 'turns')
+  if (buckets === undefined || turns === undefined) return undefined
+  return { ...buckets, turns }
+}
+
+/** Coerce the on-disk usage ledger, dropping any row that does not parse. */
+function readUsage(value: unknown): UsageLedger {
+  if (typeof value !== 'object' || value === null) return {}
+  const ledger: UsageLedger = {}
+  for (const [provider, entry] of Object.entries(value as Record<string, unknown>)) {
+    const row = readUsageRow(entry)
+    if (row !== undefined) ledger[provider] = row
+  }
+  return ledger
+}
+
+/** Coerce one on-disk rolling-window entry, or reject it outright. */
+function readUsageEntry(value: unknown): UsageEntry | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const record = value as Record<string, unknown>
+  const provider = record['provider']
+  const buckets = readBuckets(record)
+  const at = finite(record, 'at')
+  if (typeof provider !== 'string' || provider === '' || buckets === undefined || at === undefined) {
+    return undefined
+  }
+  return { provider, ...buckets, at }
+}
+
+/** Coerce the on-disk rolling-window log, dropping any entry that does not parse. */
+function readUsageEntries(value: unknown): UsageEntry[] {
+  if (!Array.isArray(value)) return []
+  const entries: UsageEntry[] = []
+  for (const item of value) {
+    const entry = readUsageEntry(item)
+    if (entry !== undefined) entries.push(entry)
+  }
+  return entries
 }
 
 /** Where the state file lives: `$DSH_HOME/tui-state.json`, default `~/.dsh`. */
@@ -93,6 +188,7 @@ function readSession(value: unknown): PersistedSession | undefined {
     id,
     model: typeof record['model'] === 'string' ? record['model'] : '',
     title: typeof record['title'] === 'string' ? record['title'] : '',
+    theme: typeof record['theme'] === 'string' ? record['theme'] : undefined,
   }
 }
 
@@ -139,9 +235,53 @@ export function decodeState(raw: string): PersistedState {
       ? parsed.peers.filter((entry): entry is string => typeof entry === 'string')
       : [],
     theme: typeof parsed.theme === 'string' ? parsed.theme : undefined,
+    // `lang` is written on every save but was never read back here, which
+    // quietly reset the interface to English on every restart — the choice
+    // only lasted as long as the process did.
+    lang: typeof parsed.lang === 'string' ? parsed.lang : undefined,
+    setupDone: parsed.setupDone === true ? true : undefined,
     expandTools: parsed.expandTools === false ? false : undefined,
     sessions,
     activeSession,
+    usage: readUsage(parsed.usage),
+    usageEntries: readUsageEntries(parsed.usageEntries),
+  }
+}
+
+/**
+ * Assemble the state to write, from the live values the app holds.
+ *
+ * The field list lives here rather than inline in the app because listing it
+ * by hand is exactly how fields get lost: `persistNow` used to rebuild the
+ * object itself, and every field it forgot — `lang` and `setupDone` were both
+ * dropped this way — was written as absent on every save no matter what the
+ * app had set. One list, in one place, exercised by a test.
+ */
+export function assembleState(input: {
+  inputHistory: string[]
+  thinking: boolean
+  theme: string
+  lang: string
+  setupDone: boolean | undefined
+  expandTools: boolean | undefined
+  peers: string[]
+  sessions: PersistedSession[]
+  activeSession: number
+  usage: UsageLedger
+  usageEntries: UsageEntry[]
+}): PersistedState {
+  return {
+    inputHistory: input.inputHistory,
+    thinking: input.thinking,
+    theme: input.theme,
+    lang: input.lang,
+    setupDone: input.setupDone,
+    expandTools: input.expandTools,
+    peers: input.peers,
+    sessions: input.sessions,
+    activeSession: input.activeSession,
+    usage: input.usage,
+    usageEntries: input.usageEntries,
   }
 }
 

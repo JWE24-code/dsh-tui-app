@@ -13,6 +13,7 @@ import {
   renderFleet,
   type FleetView,
 } from './fleet.ts'
+import { renderUsagePane, type UsageView } from './usage-view.ts'
 import { renderMarkdown } from './markdown.ts'
 import {
   Composer,
@@ -54,6 +55,16 @@ import type { PanelView } from './panels.ts'
 
 /** Most file-completion rows listed at once before the popup scrolls. */
 const MAX_AT_ROWS = 6
+
+/**
+ * Most slash-command rows listed at once before the popup scrolls.
+ *
+ * Kept small deliberately: the palette sits right above the composer, and a
+ * long match list (the command table is 30+ entries) would otherwise grow the
+ * popup to fill whatever room the terminal has, pushing the transcript out of
+ * the way for something that is supposed to be a quick lookup.
+ */
+const MAX_PALETTE_ROWS = 3
 
 /** Rows of chrome the layout reserves around the transcript. */
 const HEADER_ROWS = 2
@@ -121,6 +132,11 @@ export interface Snapshot {
    * snapshot builder renders exactly as before.
    */
   fleet?: FleetView
+  /**
+   * The `/usage` dashboard, when it is open. Optional so every existing
+   * snapshot builder renders exactly as before.
+   */
+  usage?: UsageView
   /**
    * Push-to-talk state, while the microphone is open or whisper is running.
    * Optional so every existing snapshot builder renders exactly as before.
@@ -193,7 +209,7 @@ export function layout(snapshot: Snapshot): Layout {
       FOOTER_ROWS -
       MIN_VIEWPORT_ROWS -
       POPUP_BORDER_ROWS
-    paletteRows = Math.max(Math.min(snapshot.palette.matches.length, available), 0)
+    paletteRows = Math.max(Math.min(snapshot.palette.matches.length, MAX_PALETTE_ROWS, available), 0)
   }
 
   const paletteHeight = paletteRows > 0 ? paletteRows + POPUP_BORDER_ROWS : 0
@@ -651,22 +667,21 @@ function pickerPane(snapshot: Snapshot, geometry: Layout): string[] {
 
   const out = [...head, ...visible]
   while (out.length < height - 1) out.push('')
-  const action = picker.kind === 'models' || picker.kind === 'themes'
+  const action = picker.kind === 'models' || picker.kind === 'themes' ||
+    picker.kind === 'login' || picker.kind === 'login-method'
     ? 'select'
     : picker.kind === 'plugins'
       ? 'enable or disable'
       : picker.kind === 'delete' ? 'delete' : 'open'
+  // The open-sessions list is the only one a key can act on beyond selecting
+  // a row: "x" closes the session under the cursor without leaving the list.
+  const keys = picker.kind === 'open'
+    ? `↑↓ move  ·  enter ${action}  ·  x close  ·  esc back`
+    : `↑↓ move  ·  enter ${action}  ·  esc back`
   const count = `${matches.length}/${picker.items.length}`
   out.push(
-    muted(`↑↓ move  ·  enter ${action}  ·  esc back`) +
-      ' '.repeat(
-        Math.max(
-          width -
-            displayWidth(`↑↓ move  ·  enter ${action}  ·  esc back`) -
-            displayWidth(count),
-          1,
-        ),
-      ) +
+    muted(keys) +
+      ' '.repeat(Math.max(width - displayWidth(keys) - displayWidth(count), 1)) +
       muted(count),
   )
   return out.slice(0, height)
@@ -759,6 +774,62 @@ function sessionBar(snapshot: Snapshot, geometry: Layout): string[] {
   const shown = cells.slice(Math.max(activeIndex - 1, 0), Math.max(activeIndex - 1, 0) + 2)
   const more = muted(`  +${String(snapshot.sessions.length - shown.length)}`)
   return [truncate(shown.join(muted('│')) + more, width)]
+}
+
+/**
+ * The screen row the session bar occupies, or `undefined` when it is not
+ * drawn. Clicks and the renderer must agree on where the bar is, and the
+ * header above it is conditional — so the position is computed from the same
+ * layout the frame is, never assumed to be the first row.
+ */
+export function sessionBarRow(snapshot: Snapshot): number | undefined {
+  const geometry = layout(snapshot)
+  if (geometry.sessionRows === 0) return undefined
+  // header + its blank line, when the header is being shown at all.
+  return geometry.showHeader ? 2 : 0
+}
+
+/**
+ * The tab a mouse click lands on, if any: the whole decision, pure.
+ *
+ * Keeping it here rather than in the app means the two halves that must
+ * agree — which row the bar is on, and which column inside it a tab covers —
+ * are exercised together, against the same layout the renderer uses.
+ */
+export function tabClickTarget(
+  snapshot: Snapshot,
+  cell: { column: number; row: number },
+): number | undefined {
+  if (cell.row !== sessionBarRow(snapshot)) return undefined
+  return tabAtColumn(snapshot, cell.column)
+}
+
+/**
+ * Which session a click on the tab bar landed on, if any.
+ *
+ * The extents mirror {@link sessionBar}'s cell construction exactly — mark,
+ * space, label truncated to 18, and the wrapping spaces — because a hit test
+ * that drifts from the renderer sends clicks to the wrong tab, which is worse
+ * than no click support at all: it looks deliberate. Styled text measures the
+ * same as plain (the escapes carry no width), so the arithmetic runs on the
+ * unstyled shapes. Returns `undefined` for a click between tabs, on the
+ * overflow marker, or when the bar is not being drawn at all.
+ */
+export function tabAtColumn(snapshot: Snapshot, column: number): number | undefined {
+  if (snapshot.sessions.length < 2) return undefined
+  let start = 0
+  for (let index = 0; index < snapshot.sessions.length; index += 1) {
+    const session = snapshot.sessions[index]
+    if (session === undefined) continue
+    const name = session.title === '' ? 'new' : session.title
+    // One cell: ' ' + mark(1) + ' ' + truncate(label, 18) + ' '
+    const cellWidth = Math.min(displayWidth(`${String(index + 1)} ${name}`), 18) + 3
+    if (column >= start && column < start + cellWidth) return index
+    start += cellWidth
+    if (index < snapshot.sessions.length - 1) start += 1 // the '│' separator
+    if (start > column && column < start) break
+  }
+  return undefined
 }
 
 /** A compact duration for an agent that has been alive a while. */
@@ -996,13 +1067,32 @@ function fleetPane(snapshot: Snapshot, geometry: Layout): string[] {
   }
 
   const current = fleet.sessions[fleet.selected]
-  // Only a local session can be opened in place; a remote one is reached over
-  // SSH, so the hint promises to copy the command rather than to open it.
-  const action = current === undefined ? 'open' : current.local ? 'enter open' : 'enter copy ssh'
+  // A local session switches in place; a remote one is attached to over SSH,
+  // handing the terminal over for the duration — both read "open" here, and
+  // it is only where a real terminal is not attached on both ends that this
+  // falls back to copying the command instead.
+  const action = current === undefined ? 'open' : 'enter open'
   const hint = `↑↓ move  ·  ${action}  ·  a add  ·  x remove  ·  r refresh  ·  esc back`
   const count = fleet.loading ? 'refreshing…' : `${String(fleet.sessions.length)} sessions`
   const pad = Math.max(width - displayWidth(hint) - displayWidth(count), 1)
   out.push(muted(hint) + ' '.repeat(pad) + muted(count))
+  return out.slice(0, height)
+}
+
+/**
+ * The `/usage` dashboard. `renderUsagePane` draws the whole body; this
+ * function only clips it to the viewport and adds the key hint, the same
+ * split {@link fleetPane} keeps with `renderFleet`.
+ */
+function usagePane(snapshot: Snapshot, geometry: Layout): string[] {
+  const width = geometry.contentWidth
+  const height = geometry.viewportRows
+  const usage = snapshot.usage
+  if (usage === undefined) return []
+  const body = renderUsagePane(usage, width)
+  const out = body.slice(0, Math.max(height - 1, 0))
+  while (out.length < height - 1) out.push('')
+  out.push(muted('esc back'))
   return out.slice(0, height)
 }
 
@@ -1028,9 +1118,11 @@ export function render(snapshot: Snapshot): {
         ? panelPane(snapshot, geometry)
         : snapshot.fleet?.open === true
           ? fleetPane(snapshot, geometry)
-          : snapshot.picker.kind === 'none'
-            ? viewport(snapshot, geometry)
-            : pickerPane(snapshot, geometry)
+          : snapshot.usage?.open === true
+            ? usagePane(snapshot, geometry)
+            : snapshot.picker.kind === 'none'
+              ? viewport(snapshot, geometry)
+              : pickerPane(snapshot, geometry)
     rows.push(...body)
   }
   if (geometry.showGap) rows.push('')
@@ -1056,7 +1148,10 @@ export function render(snapshot: Snapshot): {
   // of that box is about to be shifted right by the gutter.
   const lines = rows.map((line) => gutter + line)
   const cursor =
-    snapshot.picker.kind === 'none' && snapshot.fleet?.open !== true && snapshot.panel === undefined
+    snapshot.picker.kind === 'none' &&
+    snapshot.fleet?.open !== true &&
+    snapshot.usage?.open !== true &&
+    snapshot.panel === undefined
       ? {
           row: composerTop + composer.cursor.row,
           column: composer.cursor.column + gutter.length,

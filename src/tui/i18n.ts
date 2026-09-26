@@ -29,7 +29,7 @@ export function isLang(value: string): value is Lang {
 type Catalog = Record<string, string>
 
 const EN: Catalog = {
-  'welcome.title': '◆  DeepSeek Harness',
+  'welcome.title': '◆  Moqi',
   'welcome.connected': 'connected to {host}  ·  {model}',
   'welcome.harness': 'sessions, compaction and tools live in the harness',
   'welcome.type': 'type a message, or ',
@@ -109,7 +109,7 @@ const EN: Catalog = {
 }
 
 const ZH: Catalog = {
-  'welcome.title': '◆  DeepSeek Harness',
+  'welcome.title': '◆  Moqi',
   'welcome.connected': '已连接 {host}  ·  {model}',
   'welcome.harness': '会话、压缩与工具都在 harness 中',
   'welcome.type': '输入消息，或用 ',
@@ -189,6 +189,16 @@ const ZH: Catalog = {
 }
 
 const CATALOGS: Record<Lang, Catalog> = { en: EN, 'zh-CN': ZH }
+
+/**
+ * Every key one language's catalog defines. Exported for the parity test: a
+ * translation that lags a new English string is invisible at runtime (the
+ * fallback silently renders English), so the lag has to be caught by a test
+ * rather than by a reader.
+ */
+export function catalogKeys(lang: Lang): readonly string[] {
+  return Object.keys(CATALOGS[lang] ?? {})
+}
 
 /** Fill `{name}` placeholders; a missing value leaves the placeholder alone. */
 export function fill(template: string, params: Record<string, string | number> | undefined): string {

@@ -4,6 +4,254 @@ All notable changes to Moqi are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.3.0]
+
+### Added
+
+- **A first-run setup list.** A fresh install opens with the four questions
+  every new user has — interface language, color palette, provider sign-in,
+  voice setup — as a list whose rows open the pickers that answer them.
+  Closing it records that the machine has seen it; it never returns unasked.
+- **Live preview in the pickers.** Moving through `/theme` repaints the whole
+  app in the highlighted palette, and `/lang` re-renders the chrome in the
+  highlighted language; `esc` restores what was in force and `enter` keeps
+  what you landed on. Browsing by arrow key is trying it on.
+- **Tab completion for command arguments.** `/theme <par<Tab>` completes a
+  palette name (shared prefix first, then the picker), and `/lang <Tab>` does
+  the same for languages. Completion and browsing end in the same place.
+- **Mouse on by default.** The wheel scrolls the transcript and a click on a
+  tab in the session bar switches to it. Text selection needs shift while
+  reporting is on (the app's own `alt+c`/`ctrl+y` copy needs nothing);
+  `--no-mouse` restores plain-drag selection. Shift+click is deliberately
+  passed to the terminal rather than treated as an app click.
+- **The bell covers everything you stopped waiting for.** A background job
+  that finishes rings with a status line naming it, as does a fleet dispatch
+  returning from a peer — not only session turns. Jobs are announced on the
+  observed running-to-finished transition, so jobs that were already done
+  when the app started stay quiet.
+
+### Fixed
+
+- **The interface language no longer resets on restart.** `lang` was written
+  on every save but never read back, so a chosen language lasted exactly as
+  long as the process did.
+
+- **`moqi`, the app's own palette, and the new default.** A Chinese ink
+  painting, which is where the name comes from (墨气): Deep Ink ground, Xuan
+  Paper text, Ink Wash selection and borders, Slate Smoke muted layer, with
+  the accents kept in the same vocabulary — cinnabar warning, indigo-wash
+  accent, celadon/bamboo/ochre semantics — and a light variant that is the
+  same painting on paper. The app now starts on it; anyone with a persisted
+  choice keeps theirs, and `rose-pine` remains in the table as the former
+  default.
+- **Fifteen new color palettes.** `/theme` now offers twenty-one palettes where it
+  offered five, spanning the styles the original set did not: pastels
+  (Catppuccin), vivid neon (Dracula, Monokai, Synthwave), cool blues
+  (Tokyo Night), organic greens (Everforest), editor classics (One, Material,
+  Tomorrow), ink wash (Kanagawa), warm neutrals (Ayu), minimal paper, the
+  green CRT (Phosphor), and two more accessibility corners alongside `mono` —
+  `modus`, a pair built to published WCAG contrast guarantees, and
+  `contrast`, saturated hues on a pure base. Published palettes use their own
+  light and dark variants as published; where none exists (Dracula, Monokai,
+  Nord) a light variant is derived from the palette's hues, as Nord's already
+  was. `paper`, `phosphor`, `synthwave`, and `contrast` are this app's own.
+- **A plan probe for OpenAI Codex (ChatGPT).** The route has had a sign-in
+  since `/providers` landed but reported nothing in `/usage`; it now shows the
+  ChatGPT plan's tier, its 5-hour and weekly utilization, and any remaining
+  credits. The endpoint has no published contract — it is what the first-party
+  Codex client reads, reverse-engineered independently by more than one
+  third-party tracker, and it has already moved once from `x-codex-*` response
+  headers — so the parser is written to the schema those trackers agree on and
+  refuses on any other shape. Its one real trap is handled: Codex states reset
+  moments in Unix seconds where every other provider states milliseconds.
+- **Provider-stated severity colors the plan bars.** Anthropic's usage report
+  states per window how pressed it considers the limit (`normal`, `warning`,
+  `critical`), and that word now colors the bar instead of the local percentage
+  thresholds — the provider knows where the real cliff sits for the plan and
+  model in use, so `critical` at 60% is red there where a percentage rule would
+  still call it roomy. An unrecognized or missing severity falls back to the
+  local thresholds, which remain in force for providers that report only
+  numbers.
+- **The Claude block names what the week's allowance went to.** The same
+  response carries a per-surface breakdown of the 7-day window (Claude Code
+  versus chat versus the rest), shown as a note naming the surfaces that used
+  any of it — the fact that turns "the week is nearly spent" into a decision
+  about where to spend the rest.
+- **Plan readings are cached for a minute.** Closing `/usage` and reopening it
+  to re-check a number now answers from the earlier reading instead of
+  re-hitting every provider; failures are cached on the same terms, so a
+  provider that just refused is not hammered for a re-open. Countdowns on reset
+  lines stay current regardless, being drawn from the reset time at render
+  time.
+- **Per-session color themes.** `/theme` used to set one palette for the whole
+  app; it is now per session, the same way the model already is. Switching
+  tabs repaints in whichever theme that tab is on, a new session starts from
+  the theme of the one it was opened from (then diverges independently), and
+  a restored session brings its own theme back — falling back to the current
+  default if it named a theme this build no longer ships.
+- **Sign in to Claude Pro/Max and ChatGPT/Codex.** `/providers` opens a picker
+  over every credential `ctx.authorization` knows how to obtain — a
+  human-guided sign-in a plain API key cannot replace. This app adds no
+  provider knowledge of its own: it renders whatever flows are registered,
+  the same way `/plugins` lists whatever packages compose the profile.
+  Mounting `@deepseek-ai/dsh-llm-pi-ai` registers a flow for Anthropic (Claude
+  Pro/Max) and OpenAI Codex (ChatGPT Plus/Pro) — the two providers it ships a
+  login for — from the moment it mounts. A flow's notices and questions are
+  rendered as a panel that owns the keyboard until the attempt settles: a
+  message plus a page and code to act on, or a prompt (text, a pasted secret,
+  or a choice of accounts) that `enter` answers and `esc` declines. The page
+  lands on the clipboard the moment the notice does — not only once `enter`
+  asks to open it, since the terminal is not always on the machine whose
+  browser can reach it — and `enter` on a bare notice also opens it with the
+  platform's own launcher (`xdg-open`/`open`/`start`). A device-code flow's
+  page and code stay on screen once its own prompt takes over, rather than
+  being replaced by it. Signing in authenticates the route; adding it to
+  `/model` is still an ordinary `dsh-llm-pi-ai` config, documented in the
+  README.
+- **`/usage` reports what each provider's plan actually has left.** A local
+  tally of tokens cannot answer that question: only the provider knows what a
+  prepaid balance is down to, how much of a 5-hour window is gone, or when
+  either resets. The pane now asks, using the credentials already in the
+  Harness credential store, and shows a block per route — DeepSeek's prepaid
+  balance split into granted and topped up, z.ai's plan tier with its 5-hour
+  and weekly credit windows and renewal price, and a Claude Pro/Max plan's
+  5-hour and 7-day utilization. Every probe runs concurrently and every one
+  resolves: a provider that is unset, down, or slow costs its own block one
+  line of explanation and leaves the rest of the pane intact, because the
+  comparison across providers is the whole point of it. The pane paints
+  immediately with what it already knows and fills the plan half in as answers
+  land. Quota bars are colored by how close the window is to its limit, not by
+  provider identity — a quota is a status reading, not a category. No secret is
+  read from a file, printed, or put in a URL: a token goes into an
+  `Authorization` header and nowhere else. The parsers refuse rather than
+  improvise, which is load-bearing: z.ai reports a window's *limit* in a field
+  called `usage` and its *consumption* in `currentValue`, so the obvious
+  reading of that payload would show a plan as fully spent while it was 1%
+  used. The z.ai parser matches those names exactly and cross-checks them
+  against the row's own `remaining`, so a future rename surfaces as a refusal
+  rather than silently inverting the bars.
+- **DeepSeek's peak window now states its throughput cost, not only its
+  price.** The two bite differently. Pricing is predictable and countdown-able
+  — off-peak is half price, so a long job can wait for it. Throughput is the
+  one that surprises people: DeepSeek enforces no per-account request limit and
+  does not reject requests for load, it holds the connection open instead, so
+  at peak what you experience is not an error but a turn that takes far longer
+  than usual. Saying so is the difference between "DeepSeek is broken" and "it
+  is 09:00 UTC on a Tuesday".
+- **Token spend is reported in the provider's own four billed buckets**, so a
+  row splits prompt from output — priced differently everywhere, and one total
+  hides which way a route is expensive — and reports the share of its prompt
+  served from cache when there is one to report. That last is the one figure
+  here you can act on: a rate that collapses is usually a cache that stopped
+  being hit.
+- **`/usage`** is a full-screen colored dashboard rather than a markdown
+  overlay, so it can carry real per-provider color: three rolling-window
+  sections (session 5h, week 7d — the shape Anthropic's Claude Pro/Max and
+  z.ai's GLM coding plan both rate-limit on — and a lifetime total that never
+  forgets), each a bar chart of every provider's share of the tokens spent *in
+  that window*, scaled to that window's own total rather than to its busiest
+  provider, so two close providers read as two bars close in length rather
+  than one exaggerated against the other. A provider keeps the same color in
+  every section it appears in. Session and week are computed from a timestamped
+  log kept alongside the lifetime ledger, pruned past 7 days on every write.
+  `/usage reset` clears both.
+- **`x` closes a session from the `/sessions` list** without leaving it, so
+  tidying up several open sessions is not a switch-then-`/close`-then-reopen
+  loop. The last session still cannot be closed this way, the same guard
+  `/close` already enforces.
+- **`/fleet` now attaches to a remote session instead of only reading about
+  it.** `enter` on a remote row hands the terminal to a real `ssh -t` running
+  that device's `tui` profile and resuming the session — the same keys, the
+  same screen, as if it were local — and returns to the overview, repainted,
+  once that session ends. Falls back to the previous copy-the-command
+  behavior when this process is not attached to a real terminal on both
+  ends, since there is then nothing to hand over.
+
+### Fixed
+
+- **`/usage`'s token figures were measuring the wrong quantity entirely.** The
+  ledger subtracted one *context size* from another and recorded the difference
+  as spend. Context pressure — the size of the prompt the next request would
+  send, which is what the footer's `↑`/`↓` pair shows — is not cumulative, so
+  that subtraction could not be right. A turn whose context had shrunk since
+  the previous one produced a negative difference, clamped to zero, and
+  recorded a full prompt's worth of real spend as nothing at all; observed
+  live, a second turn billed ~8,300 prompt tokens while the old arithmetic
+  computed `7,000 - 8,302` and logged zero. A multi-request turn fared no
+  better: only the last request's output was ever counted. The ledger now reads
+  the Harness's own `tokenUsage` session projection — four separately-priced
+  billed buckets, already retry-aware, so a retried attempt counts as the
+  second billed attempt it is — and differences two readings of a quantity that
+  really is cumulative. Every failure mode (a projection not mounted, a session
+  not yet adopted, a shape this app does not recognize) records nothing rather
+  than a confident zero, and the unrecorded spend is not lost: it lands the
+  next time a reading succeeds. The persisted state version is bumped, which
+  discards the old figures rather than carrying them forward under names that
+  would imply they had ever been right.
+- **A Claude plan's limits read as `anthropic`.** An OAuth-only route is
+  configured as an empty entry, so the adapter has nothing to label it with and
+  hands back the bare route id. `/usage` now supplies a readable name for the
+  routes it knows — a label the adapter does supply still wins.
+- **Attaching to a remote fleet session could look like the whole app
+  restarting.** Handing the terminal to `ssh -t` running a second, nested copy
+  of this same app surfaced two real bugs on the way back: a stray `SIGHUP` —
+  a known hazard of a child taking over a tty — was read as the terminal
+  itself hanging up and closed the app outright, and the screen's diff cache,
+  left stale by the handover, made the next paint skip lines it believed were
+  unchanged, coming back to a screen with nothing on it but the new status
+  line. Both are fixed at the one seam every terminal handover already goes
+  through, so `alt+e`'s `$VISUAL`/`$EDITOR` round trip is hardened by the same
+  fix, caught live when a broken `$EDITOR` reproduced the second bug on the
+  first try.
+- **A completed browser sign-in could vanish instead of committing the
+  credential.** A flow racing a typed code against its own browser callback
+  withdraws the losing prompt through that prompt's own `signal` — the
+  callback winning is the ordinary case, not a refusal — and this app's
+  `prompt()` implementation rejected that withdrawal with
+  `AuthorizationDeclinedError`, the class reserved for a human explicitly
+  saying no. A flow that reads that rejection at face value discards the
+  credential it just obtained through the browser instead of finishing the
+  commit, which is what "the website said successful, but nothing came back"
+  looked like from here. The signal-abort path now rejects with a plain
+  error instead; only `esc` on a live prompt still raises the decline.
+- **A failed `/fleet` attach gave no way to see why.** Whatever the remote
+  command printed — a stack trace, "command not found," a session the store
+  no longer has — was written straight to the terminal while ssh had it, then
+  erased the instant the screen cleared to repaint this app's own frame,
+  leaving only a bare exit code in the status line. A non-zero exit now opens
+  an overlay with the exact command to run outside this app instead, where
+  nothing clears its output away mid-read.
+- **A copy could silently fail to reach the terminal inside tmux or GNU
+  screen.** The OSC 52 clipboard escape was always written raw, but neither
+  multiplexer forwards an embedded escape sequence to the real terminal on
+  its own — tmux drops it unless `allow-passthrough` happens to be set, not
+  the default before tmux 3.3, and screen only ever relays a DCS string it
+  recognizes as its own. The escape is now wrapped in whichever
+  multiplexer's own passthrough syntax applies (`Ptmux;` for tmux, with every
+  embedded ESC doubled; a chunked bare DCS for screen, whose own strings cap
+  at 768 bytes) before it reaches the terminal, live-verified inside a real
+  tmux session.
+
+### Changed
+
+- **The `/` command palette caps at 3 visible rows and scrolls**, however
+  tall the terminal and however many commands match, so it stays a quick
+  lookup rather than growing to fill the screen on every keystroke.
+- **`--vim` replaces the `/vim` command.** Modal editing is an editing
+  preference set once at launch, not a mid-conversation toggle, so it moved
+  to a startup flag alongside `--mouse` and `--no-bell`.
+- **`/login` renamed `/providers`.** A noun, matching `/model`, `/theme`, and
+  `/plugins` — the command browses and signs in to provider routes, it does
+  not itself perform "a login."
+
+### Removed
+
+- **`/about`** — version and connection details are still available through
+  the README and `/update`'s own version check; the overlay duplicated
+  information the footer and `--version` already carry.
+
 ## [0.2.1]
 
 ### Fixed

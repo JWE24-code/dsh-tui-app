@@ -31,10 +31,12 @@ export interface TuiStartupValues {
   thinking: boolean
   /** Context budget override; absent means use the model's own capacity. */
   contextLimit: number | undefined
-  /** Report mouse events so the wheel scrolls; off by default. */
+  /** Report mouse events so the wheel scrolls and the session bar clicks; on by default. */
   mouse: boolean
   /** Ring the bell when a session's turn finishes; on by default. */
   bell: boolean
+  /** Modal vim editing for the composer; off by default. */
+  vim: boolean
   /** Bring back the sessions that were open at the last exit; on by default. */
   restore: boolean
   /** Devices to include in the fleet overview; empty means this one only. */
@@ -58,8 +60,10 @@ function tuiCommand(): Command {
     .option('--model <name>', 'model to select for this run')
     .option('--thinking', 'start with reasoning output visible')
     .option('--context-limit <tokens>', "context budget override; default is the model's own capacity")
-    .option('--mouse', 'report mouse events so the wheel scrolls (disables terminal text selection)')
+    .option('--mouse', 'report mouse events (the default; accepted for compatibility)')
+    .option('--no-mouse', 'disable mouse reporting, so plain drag selects text for the terminal')
     .option('--no-bell', 'stay silent when a session finishes instead of ringing the terminal bell')
+    .option('--vim', 'modal vim editing in the composer: esc for normal mode, i to insert')
     .option('--no-restore', 'start with one empty session instead of reopening the last ones')
     .option(
       '--peer <host>',
@@ -100,6 +104,7 @@ export function apply(ctx: Context): void {
       contextLimit?: string
       mouse?: boolean
       bell?: boolean
+      vim?: boolean
       restore?: boolean
       peer?: string[]
       voiceModel?: string
@@ -132,9 +137,10 @@ export function apply(ctx: Context): void {
       model: options.model,
       thinking: options.thinking === true,
       contextLimit,
-      mouse: options.mouse === true,
+      mouse: options.mouse !== false,
       // commander maps --no-bell to bell: false and leaves it true otherwise.
       bell: options.bell !== false,
+      vim: options.vim === true,
       restore: options.restore !== false,
       peers: options.peer ?? [],
       // Left undefined the app reads MOQI_WHISPER_MODEL / _BIN, then falls

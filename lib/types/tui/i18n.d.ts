@@ -20,6 +20,13 @@ export declare const LANGS: readonly {
 }[];
 /** Whether an untrusted string names a language this build speaks. */
 export declare function isLang(value: string): value is Lang;
+/**
+ * Every key one language's catalog defines. Exported for the parity test: a
+ * translation that lags a new English string is invisible at runtime (the
+ * fallback silently renders English), so the lag has to be caught by a test
+ * rather than by a reader.
+ */
+export declare function catalogKeys(lang: Lang): readonly string[];
 /** Fill `{name}` placeholders; a missing value leaves the placeholder alone. */
 export declare function fill(template: string, params: Record<string, string | number> | undefined): string;
 /** Look a string up in one explicit language. */

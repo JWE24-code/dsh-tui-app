@@ -122,7 +122,7 @@ async function main(): Promise<void> {
     // stub: each overlay has to appear with its own content, and esc has to
     // close it again before the next one opens.
     const probes: { command: string; expect: string }[] = [
-      { command: '/about', expect: 'moqi' },
+      { command: '/usage', expect: 'Usage' },
       { command: '/jobs', expect: 'Background jobs' },
       { command: '/mcp', expect: 'MCP servers' },
       { command: '/tree', expect: 'Session tree' },

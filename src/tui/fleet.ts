@@ -209,6 +209,19 @@ export function jumpCommand(session: FleetSession, profile = 'tui'): string {
 }
 
 /**
+ * The argv to actually run {@link jumpCommand}'s remote half, for spawning
+ * directly rather than copying to a clipboard.
+ *
+ * The session id is quoted for the remote shell the same way a dispatched
+ * prompt is: a presence record names the id, and a presence record can come
+ * from a compromised or merely buggy peer, so nothing here trusts it to be
+ * shell-safe on its own.
+ */
+export function jumpArgv(session: FleetSession, profile = 'tui'): string[] {
+  return ['-t', session.host, `dsh --profile ${profile} --resume ${shellQuote(session.sessionId)}`]
+}
+
+/**
  * Quote one argument for a POSIX shell.
  *
  * A prompt is arbitrary text and is about to travel through `ssh`, which hands
