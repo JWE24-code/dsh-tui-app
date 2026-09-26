@@ -75,7 +75,7 @@ Every feature or fix updates, in the same commit:
 - a test suite, registered in `package.json`'s `test` script (the offline-import
   walker reads that script, so an unregistered suite is also an unchecked one).
 
-The README quotes a suite/assertion total (currently **34 suites, 1765
+The README quotes a suite/assertion total (currently **34 suites, 1786
 assertions**). Recompute and update it:
 
 ```bash
@@ -250,3 +250,13 @@ Reasonable next threads, none of them requested yet:
 - Cache plan probes briefly, so reopening `/usage` twice in a minute does not
   re-hit every provider.
 - A probe for `openai-codex`, which has a sign-in flow but no plan probe.
+
+The first three of those have since landed (severity colours the bar, the
+breakdown is a note under the Claude block, and `PlanCache` in `src/credits.ts`
+holds the last reading for `PLAN_CACHE_TTL_MS`); the codex probe is still open.
+Two facts learned doing it: the live `limits[]` row for the weekly window
+arrives `is_active: false` while describing the week that is drawn (so the
+parser ignores that flag), and the agent-harness sandbox exports `NO_COLOR=1`
+and `TERM=dumb`, which the app honours — start the tmux pane with
+`env -u NO_COLOR TERM=xterm-256color dsh --profile tui-dev` when verifying
+colour claims live, or every bar will honestly render uncoloured.

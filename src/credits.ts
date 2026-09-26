@@ -21,6 +21,7 @@
  */
 
 import {
+  anthropicBreakdownNotes,
   parseAnthropicUsage,
   parseDeepSeekBalance,
   parseZaiPlan,
@@ -264,7 +265,10 @@ async function anthropicPlan(
   if (windows.length === 0) {
     return { ...base, problem: 'plan limits response could not be read' }
   }
-  return { ...base, windows, notes: anthropicNotes(windows) }
+  // The breakdown is a separate fact from the windows and must not gate them:
+  // a response whose breakdown is missing or unparseable still showed its
+  // limits, so the note is added only when it says something.
+  return { ...base, windows, notes: [...anthropicNotes(windows), ...anthropicBreakdownNotes(result.body)] }
 }
 
 /**
@@ -372,4 +376,54 @@ export async function collectPlans(
       }
     }),
   )
+}
+
+// ---------------------------------------------------------------------- cache
+
+/**
+ * How long a plan reading is reused before the providers are asked again.
+ *
+ * Short enough that a reading a user acts on is at most a minute old, long
+ * enough that toggling the pane — open, esc, open again to check a number —
+ * does not re-hit every provider each time. The countdown texts inside the
+ * cached blocks were computed at probe time and so can lag by this much; the
+ * countdowns on the reset lines are not cached, because they are drawn from
+ * `resetAt` at render time and stay current.
+ */
+export const PLAN_CACHE_TTL_MS = 60_000
+
+/**
+ * A brief memory of the last {@link collectPlans} result, so reopening
+ * `/usage` twice in a minute answers from the earlier reading instead of
+ * re-asking every provider.
+ *
+ * Pure with an injected clock, so the boundary behaviour is testable. Failures
+ * are cached on the same terms as successes: a provider that just refused or
+ * timed out should not be hammered because the user re-opened the pane, and a
+ * minute is short enough to retry soon anyway. There is deliberately no
+ * invalidation hook tied to sign-in: a fresh credential is exactly the case
+ * where waiting out a minute is preferable to another probe storm.
+ */
+export class PlanCache {
+  private readonly ttl: number
+  private readonly now: () => number
+  private entry: { plans: ProviderPlan[]; at: number } | undefined
+
+  // Explicit assignments rather than parameter properties: the test runner
+  // loads this file with type-stripping, which rejects that syntax.
+  constructor(ttl: number = PLAN_CACHE_TTL_MS, now: () => number = Date.now) {
+    this.ttl = ttl
+    this.now = now
+  }
+
+  /** The cached reading, when one is still fresh enough to show. */
+  get(): ProviderPlan[] | undefined {
+    if (this.entry === undefined) return undefined
+    return this.now() - this.entry.at < this.ttl ? this.entry.plans : undefined
+  }
+
+  /** Remember a reading from `collectPlans`, stamped now. */
+  set(plans: ProviderPlan[]): void {
+    this.entry = { plans, at: this.now() }
+  }
 }

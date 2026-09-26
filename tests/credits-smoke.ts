@@ -16,12 +16,15 @@ import {
   anthropicNotes,
   hasProbe,
   friendlyName,
+  PlanCache,
+  PLAN_CACHE_TTL_MS,
   DEEPSEEK_BALANCE_URL,
   ZAI_QUOTA_URL,
   type CredentialLookup,
   type FetchLike,
 } from '../src/credits.ts'
 import {
+  anthropicBreakdownNotes,
   countdown,
   money,
   parseAnthropicUsage,
@@ -29,8 +32,10 @@ import {
   parseZaiPlan,
   parseZaiQuota,
   renderPlans,
+  windowColor,
   zaiWindowLabel,
 } from '../src/tui/credits.ts'
+import { colAccent, colGreen, colRose } from '../src/tui/theme.ts'
 import { stripAnsi, displayWidth } from '../src/tui/text.ts'
 
 let passed = 0
@@ -361,6 +366,74 @@ const emptyQuota = await collectPlans(
 )
 check('a plan with no reported windows explains itself', emptyQuota[0]?.problem?.includes('no credit windows') === true)
 check('the plan name is still shown even when the quota was empty', emptyQuota[0]?.plan === 'Lite')
+
+// ------------------------------------------------- Anthropic severity & split
+
+// The live payload's limits[] array, as captured from the real endpoint: the
+// session row is critical at 94%, the weekly row normal at 26%, and the weekly
+// row arrives is_active:false while describing the week that is drawn — which
+// is why the parser must not consult that flag.
+const withLimits = parseAnthropicUsage({
+  five_hour: { utilization: 94, resets_at: '2026-09-26T16:19:59.779583+00:00' },
+  seven_day: { utilization: 26, resets_at: '2026-10-03T00:59:59.779602+00:00' },
+  limits: [
+    { kind: 'session', group: 'session', percent: 94, severity: 'critical', resets_at: '2026-09-26T16:19:59.779583+00:00', scope: null, is_active: true },
+    { kind: 'weekly_all', group: 'weekly', percent: 26, severity: 'normal', resets_at: '2026-10-03T00:59:59.779602+00:00', scope: null, is_active: false },
+  ],
+})
+check('a stated severity attaches to its window', withLimits[0]?.severity === 'critical')
+check('the weekly row is matched even when is_active is false', withLimits[1]?.severity === 'normal')
+
+check('an unknown limit kind does not leak onto a window', parseAnthropicUsage({ five_hour: { utilization: 5 }, limits: [{ kind: 'other', severity: 'warning' }] })[0]?.severity === undefined)
+check('a limits array of unrecognized shape leaves severity unset', parseAnthropicUsage({ five_hour: { utilization: 5 }, limits: 'nope' })[0]?.severity === undefined)
+check('a severity spelled with the synonym field still parses', parseAnthropicUsage({ seven_day: { utilization: 5 }, limits: [{ kind: 'weekly_all', level: 'warning' }] })[0]?.severity === 'warning')
+
+// The severity colors the bar the provider's way, not the local-percentage way.
+check('a critical reading is red even below the local red threshold', windowColor(0.6, 'critical') === windowColor(0.99, undefined))
+check('a critical reading is red where the local rule would say green', windowColor(0.6, 'critical') === colRose)
+check('a warning reading is amber at any share', windowColor(0.1, 'warning') === colAccent)
+check('a normal reading is green even at the local red threshold', windowColor(0.99, 'normal') === colGreen)
+check('an unrecognized severity falls back to local thresholds', windowColor(0.95, 'spooky') === colRose)
+check('no severity keeps the local thresholds', windowColor(0.8, undefined) === colAccent)
+
+// The breakdown names the surfaces that spent the week, in the response's order.
+const breakdownBody = {
+  seven_day_breakdown: {
+    as_of: '2026-09-26T13:32:02.802132+00:00',
+    window_started_at: '2026-09-26T00:59:59.779602+00:00',
+    rows: [
+      { key: 'claude_code', display_name: 'Claude Code', percent: 100 },
+      { key: 'chat', display_name: 'Chats', percent: 0 },
+      { key: 'cowork', display_name: 'Cowork', percent: 0 },
+      { key: 'other', display_name: 'Other', percent: 0 },
+    ],
+  },
+}
+const breakdown = anthropicBreakdownNotes(breakdownBody)
+check('a spent week names the surface that spent it', breakdown[0]?.text.includes('Claude Code') === true)
+check('a surface at zero percent is not listed', breakdown[0]?.text.includes('Chats') === false)
+check('a breakdown with nothing spent says nothing', anthropicBreakdownNotes({ seven_day_breakdown: { rows: [{ display_name: 'Chats', percent: 0 }] } }).length === 0)
+check('a missing breakdown says nothing', anthropicBreakdownNotes({}).length === 0)
+check('a malformed breakdown says nothing rather than guessing', anthropicBreakdownNotes({ seven_day_breakdown: { rows: 7 } }).length === 0)
+
+// --------------------------------------------------------------- PlanCache
+
+// An injected clock walks the boundary exactly, which is the only honest way to
+// test a TTL.
+let clock = 1_000
+const cache = new PlanCache(PLAN_CACHE_TTL_MS, () => clock)
+check('an empty cache has nothing to give', cache.get() === undefined)
+const reading = [{ provider: 'deepseek', displayName: 'DeepSeek', windows: [], notes: [] }]
+cache.set(reading)
+check('a fresh reading is returned immediately', cache.get() === reading)
+clock += PLAN_CACHE_TTL_MS - 1
+check('a reading one millisecond short of the TTL is still fresh', cache.get() === reading)
+clock += 1
+check('a reading past the TTL is gone', cache.get() === undefined)
+cache.set(reading)
+clock += PLAN_CACHE_TTL_MS
+cache.set([...reading, { provider: 'zai', displayName: 'z.ai', windows: [], notes: [] }])
+check('a later reading replaces the earlier one', (cache.get()?.length ?? 0) === 2)
 
 // ------------------------------------------------------------- formatting
 

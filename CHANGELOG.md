@@ -8,6 +8,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Provider-stated severity colors the plan bars.** Anthropic's usage report
+  states per window how pressed it considers the limit (`normal`, `warning`,
+  `critical`), and that word now colors the bar instead of the local percentage
+  thresholds — the provider knows where the real cliff sits for the plan and
+  model in use, so `critical` at 60% is red there where a percentage rule would
+  still call it roomy. An unrecognized or missing severity falls back to the
+  local thresholds, which remain in force for providers that report only
+  numbers.
+- **The Claude block names what the week's allowance went to.** The same
+  response carries a per-surface breakdown of the 7-day window (Claude Code
+  versus chat versus the rest), shown as a note naming the surfaces that used
+  any of it — the fact that turns "the week is nearly spent" into a decision
+  about where to spend the rest.
+- **Plan readings are cached for a minute.** Closing `/usage` and reopening it
+  to re-check a number now answers from the earlier reading instead of
+  re-hitting every provider; failures are cached on the same terms, so a
+  provider that just refused is not hammered for a re-open. Countdowns on reset
+  lines stay current regardless, being drawn from the reset time at render
+  time.
 - **Per-session color themes.** `/theme` used to set one palette for the whole
   app; it is now per session, the same way the model already is. Switching
   tabs repaints in whichever theme that tab is on, a new session starts from

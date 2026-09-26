@@ -20,6 +20,7 @@
  * Pure like the rest of `tui/`: no Harness, no network, no clock.
  * @module
  */
+import { colGreen } from './theme.ts';
 /** One rolling quota window a provider enforces and reports. */
 export interface CreditWindow {
     /** How the provider describes the window, e.g. `Session (5h)`, `Week (7d)`. */
@@ -30,6 +31,13 @@ export interface CreditWindow {
     unit?: string;
     /** Epoch millis the window next resets, when the provider says. */
     resetAt?: number;
+    /**
+     * How pressed the provider itself considers the window, in the provider's own
+     * vocabulary — Anthropic's usage report states `normal`, `warning`, and
+     * `critical` per window. Carried verbatim rather than translated so an
+     * unknown value falls back to local thresholds instead of being misread.
+     */
+    severity?: string;
 }
 /** A prepaid or pay-as-you-go money balance. */
 export interface CreditBalance {
@@ -132,6 +140,18 @@ export declare function parseZaiPlan(body: unknown): ZaiPlan | undefined;
  * all rather than two empty bars.
  */
 export declare function parseAnthropicUsage(body: unknown): CreditWindow[];
+/**
+ * Turn `seven_day_breakdown` into a note naming which surfaces spent the week's
+ * allowance — the report says what the week went on (`Claude Code`, `Chats`,
+ * …), which is the fact that turns "the week is nearly spent" into a decision
+ * about where to spend the rest of it.
+ *
+ * Only surfaces that used some of the week are named, in the response's order;
+ * a breakdown where nothing was used yet says nothing rather than listing four
+ * zeroes. Percentages are rounded as the provider reports them — no sum, no
+ * average, nothing invented.
+ */
+export declare function anthropicBreakdownNotes(body: unknown): PlanNote[];
 /** `1h 12m` / `4d 9h` / `12m` — the shape every countdown in the app uses. */
 export declare function countdown(ms: number): string;
 /**
@@ -140,6 +160,22 @@ export declare function countdown(ms: number): string;
  * information than `140` while taking more room in a narrow pane.
  */
 export declare function money(amount: number, currency: string): string;
+/**
+ * Color a utilization bar: by the provider's own severity reading when it gave
+ * one, otherwise by how close the window is to its limit.
+ *
+ * The provider's word wins when available (Anthropic's `critical` colors the
+ * bar red at 94% *and would at 60%*, because the provider knows where the real
+ * cliff sits for the plan and model in use); the local thresholds are the
+ * fallback for providers that report only numbers — a quota is a status
+ * reading, not a category, so it earns the status palette either way: green
+ * while there is room, amber once most of it is gone, red at the point where
+ * the next long turn may be the one that fails.
+ *
+ * Exported for its test: the colour decision is the behaviour, and asserting
+ * against theme-resolved escape codes would tie the test to one palette.
+ */
+export declare function windowColor(share: number, severity: string | undefined): typeof colGreen;
 /**
  * Render the plans-and-limits section.
  *

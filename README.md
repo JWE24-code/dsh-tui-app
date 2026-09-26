@@ -679,6 +679,7 @@ what each provider's plan has left, and what this app has actually spent.
    Claude (Pro/Max)
      Session (5h)  █████████████████████░░░   89%  resets in 3h 4m
      Week (7d)     ██████░░░░░░░░░░░░░░░░░░   25%  resets in 6d 11h
+     week's allowance went to: Claude Code 100%
 
  Token spend — session (5h)
    zai       ████████████████████████  100%  16,623  ↑16,616 ↓7 8% cached
@@ -704,13 +705,25 @@ printed: a token goes into an `Authorization` header and nowhere else.
 |---|---|---|
 | DeepSeek | prepaid balance, granted vs topped up, availability, peak-window state | `DEEPSEEK_API_KEY` |
 | z.ai | plan tier, 5-hour and weekly credit windows, renewal date and price | `ZAI_API_KEY` |
-| Claude (Pro/Max) | 5-hour session and 7-day week utilization | the sign-in `/providers` stored |
+| Claude (Pro/Max) | 5-hour session and 7-day week utilization, the provider's own severity per window, which surface spent the week | the sign-in `/providers` stored |
 
 Every probe runs concurrently and every one of them resolves: a provider that is
 unset, down, or slow costs its own block a line of explanation and leaves the
 rest of the pane intact, because the comparison across providers is the whole
 point of it. The pane paints immediately with what it already knows and fills in
-the plan half as answers land.
+the plan half as answers land. A reading less than a minute old is reused, so
+closing the pane and reopening it to re-check a number answers from memory
+instead of re-hitting every provider.
+
+When a provider states how pressed a window is in its own words, that word
+colors the bar. Anthropic's usage report carries a `severity` per limit —
+`normal`, `warning`, `critical` — and it wins over the local percentage
+thresholds used for providers that only report numbers, because the provider
+knows where the real cliff sits for the plan and model in use; `critical` at 60%
+is red there where a percentage rule would still call it roomy. Anthropic's
+report also names which surfaces spent the week's allowance — Claude Code
+versus chat versus everything else — and the block says so, because "the week
+is nearly spent" only becomes a decision when it says what the week went on.
 
 The parsers refuse rather than improvise. A field that is missing or of the wrong
 type yields "could not be read", never a zero dressed up as a measurement —
@@ -948,7 +961,7 @@ regression still would.
     provider parses the real command line.
   - `dsh --profile tui </dev/null` boots the bundle and exits on the non-TTY
     guard.
-- **34 suites, 1765 assertions**, covering rendering (including a pty round
+- **34 suites, 1786 assertions**, covering rendering (including a pty round
   trip through the real screen, decoder, and frame renderer), streaming
   projection, queueing, steering, persistence, the usage ledger and its
   colored dashboard, session storage, cross-session search, the panels

@@ -145,7 +145,7 @@ import {
   type UsageEntry,
   type UsageLedger,
 } from './usage.ts'
-import { collectPlans, hasProbe, type CredentialLookup, type Route } from './credits.ts'
+import { collectPlans, hasProbe, PlanCache, type CredentialLookup, type Route } from './credits.ts'
 import { UsageView } from './tui/usage-view.ts'
 import {
   FleetView,
@@ -526,6 +526,8 @@ class TuiApp {
   private usageEntries: UsageEntry[] = []
   /** The `/usage` dashboard's own open/closed state and last-drawn data. */
   private readonly usageView = new UsageView()
+  /** The last provider-plan reading, reused briefly so reopens do not re-probe. */
+  private readonly planCache = new PlanCache()
 
   /** The cross-device overview, and what this device publishes to it. */
   private readonly fleet = new FleetView()
@@ -1867,6 +1869,15 @@ class TuiApp {
    * next time it opens rather than painting over whatever replaced it.
    */
   private async refreshPlans(): Promise<void> {
+    // A reading less than a minute old answers immediately: reopening the pane
+    // to re-check a number should not re-hit every provider. The pending
+    // placeholder this replaced is painted for a frame at most.
+    const cached = this.planCache.get()
+    if (cached !== undefined) {
+      this.usageView.setPlans(cached, Date.now())
+      if (this.usageView.open) this.paint()
+      return
+    }
     const credentials = this.ctx.get('credentials')
     if (credentials === undefined) {
       this.usageView.setPlans([], Date.now())
@@ -1894,6 +1905,7 @@ class TuiApp {
       },
     }
     const plans = await collectPlans(this.planRoutes(), lookup)
+    this.planCache.set(plans)
     this.usageView.setPlans(plans, Date.now())
     if (this.usageView.open) this.paint()
   }

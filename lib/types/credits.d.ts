@@ -113,3 +113,36 @@ export declare function friendlyName(provider: string, displayName: string): str
  * must not be able to empty it.
  */
 export declare function collectPlans(routes: readonly Route[], lookup: CredentialLookup, fetchImpl?: FetchLike, now?: () => number): Promise<ProviderPlan[]>;
+/**
+ * How long a plan reading is reused before the providers are asked again.
+ *
+ * Short enough that a reading a user acts on is at most a minute old, long
+ * enough that toggling the pane — open, esc, open again to check a number —
+ * does not re-hit every provider each time. The countdown texts inside the
+ * cached blocks were computed at probe time and so can lag by this much; the
+ * countdowns on the reset lines are not cached, because they are drawn from
+ * `resetAt` at render time and stay current.
+ */
+export declare const PLAN_CACHE_TTL_MS = 60000;
+/**
+ * A brief memory of the last {@link collectPlans} result, so reopening
+ * `/usage` twice in a minute answers from the earlier reading instead of
+ * re-asking every provider.
+ *
+ * Pure with an injected clock, so the boundary behaviour is testable. Failures
+ * are cached on the same terms as successes: a provider that just refused or
+ * timed out should not be hammered because the user re-opened the pane, and a
+ * minute is short enough to retry soon anyway. There is deliberately no
+ * invalidation hook tied to sign-in: a fresh credential is exactly the case
+ * where waiting out a minute is preferable to another probe storm.
+ */
+export declare class PlanCache {
+    private readonly ttl;
+    private readonly now;
+    private entry;
+    constructor(ttl?: number, now?: () => number);
+    /** The cached reading, when one is still fresh enough to show. */
+    get(): ProviderPlan[] | undefined;
+    /** Remember a reading from `collectPlans`, stamped now. */
+    set(plans: ProviderPlan[]): void;
+}
