@@ -74,6 +74,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   commit, which is what "the website said successful, but nothing came back"
   looked like from here. The signal-abort path now rejects with a plain
   error instead; only `esc` on a live prompt still raises the decline.
+- **A failed `/fleet` attach gave no way to see why.** Whatever the remote
+  command printed — a stack trace, "command not found," a session the store
+  no longer has — was written straight to the terminal while ssh had it, then
+  erased the instant the screen cleared to repaint this app's own frame,
+  leaving only a bare exit code in the status line. A non-zero exit now opens
+  an overlay with the exact command to run outside this app instead, where
+  nothing clears its output away mid-read.
 
 ### Changed
 
