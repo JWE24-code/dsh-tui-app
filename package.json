@@ -55,7 +55,8 @@
     "setup-voice": "node scripts/install-voice.mjs",
     "bench": "node --experimental-strip-types scripts/bench-render.ts",
     "test:live": "MOQI_LIVE=1 node --experimental-strip-types tests/live-pty.ts",
-    "test:package": "node scripts/verify-package.mjs"
+    "test:package": "node scripts/verify-package.mjs",
+    "check-identity": "node scripts/check-commit-identity.mjs"
   },
   "dependencies": {
     "commander": "^15.0.0"

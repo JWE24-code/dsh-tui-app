@@ -201,6 +201,18 @@ future source for bar colour instead of local thresholds.
 
 ## Traps that have cost real time
 
+- **Commit metadata leaks a personal address without touching a file.** The
+  history of this repository already contains commits authored as a work
+  address and committed with a personal one, written by a machine whose
+  `user.email` was not the public identity — and nothing in review shows it,
+  because it is not in the diff. Commits here must be authored and committed
+  as `JWE24-code <292770342+JWE24-code@users.noreply.github.com>`; pin it per
+  clone (`git config user.email …`) and check before pushing with
+  `npm run check-identity <base>..HEAD`. CI runs the same check over the
+  commits a push or PR adds, and its failure message masks the address,
+  because the CI log of a public repository is itself public. The npm tarball
+  is unaffected by this — metadata is not shipped — so an audit is about the
+  repository's history, not the release artifact.
 - **A new Harness peer dependency must be marked optional in *both*
   `package.json` and the lock file.** Every `@deepseek-ai/*` entry under
   `peerDependencies` also needs an entry under `peerDependenciesMeta` with
