@@ -55,6 +55,30 @@ check('switching back restores english', t('approval.allow') === 'Allow once')
 const EN_KEYS = new Set(['welcome.title', 'welcome.connected', 'approval.hint', 'help.body'])
 const ZH_KEYS = [...EN_KEYS]
 check('every sampled key exists in both languages', ZH_KEYS.every((key) => translate('zh-CN', key) !== key))
+
+// Full parity, not samples: a translation that lags a new English string is
+// invisible at runtime because the fallback silently renders English, so only
+// comparing the whole key sets catches it.
+import { catalogKeys } from '../src/tui/i18n.ts'
+const en = new Set(catalogKeys('en'))
+const zh = new Set(catalogKeys('zh-CN'))
+check('every english key has a translation', [...en].every((key) => zh.has(key)))
+check('no translation exists without an english key', [...zh].every((key) => en.has(key)))
+check('no translation is empty', [...zh].every((key) => translate('zh-CN', key).trim() !== ''))
+
+// A translation may drop a placeholder its language has no use for (english
+// plural `{s}`, which chinese cannot express) but must never rename one or
+// invent one the caller does not fill -- that would render as literal `{x}`.
+const placeholders = (text: string): Set<string> => new Set(text.match(/\{(\w+)\}/g) ?? [])
+check(
+  'every translated placeholder is one the english string defines',
+  [...zh].every((key) => {
+    const used = placeholders(translate('zh-CN', key))
+    const known = placeholders(translate('en', key))
+    return [...used].every((name) => known.has(name))
+  }),
+)
+
 const enLines = translate('en', 'help.body').split('\n')
 const zhLines = translate('zh-CN', 'help.body').split('\n')
 check('the key reference has the same number of lines in both languages', enLines.length === zhLines.length)

@@ -245,7 +245,7 @@ check('tool row is shown', normal.some((line) => stripAnsi(line).includes('read_
 
 // An empty transcript shows the welcome panel.
 const welcome = assertFrame('welcome', snapshot({ messages: [], haveUsage: false }))
-check('welcome names the harness', welcome.some((line) => stripAnsi(line).includes('DeepSeek Harness')))
+check('welcome names the app', welcome.some((line) => stripAnsi(line).includes('Moqi')))
 check('welcome estimates context', stripAnsi(welcome[welcome.length - 1] ?? '').includes('~'))
 
 // Streaming: spinner on the left, partial text in the transcript.

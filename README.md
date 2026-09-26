@@ -1003,7 +1003,7 @@ regression still would.
     provider parses the real command line.
   - `dsh --profile tui </dev/null` boots the bundle and exits on the non-TTY
     guard.
-- **34 suites, 2697 assertions**, covering rendering (including a pty round
+- **34 suites, 2701 assertions**, covering rendering (including a pty round
   trip through the real screen, decoder, and frame renderer), streaming
   projection, queueing, steering, persistence, the usage ledger and its
   colored dashboard, session storage, cross-session search, the panels
