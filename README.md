@@ -1058,6 +1058,16 @@ regression still would.
 
 ## Release steps
 
+Publishing is automated: run the gates below locally, then publish a GitHub
+Release whose tag matches `package.json` (`v0.3.0` for `0.3.0`) and the
+[Publish to npm](.github/workflows/publish.yml) workflow runs them again on a
+clean machine before publishing with provenance. It is triggered by the
+Release rather than by a push, because npm rejects an existing version and a
+workflow that bumped one for you would turn an ordinary merge into a release
+nobody decided on. The one-time npm-side setup — trusted publishing, so no
+long-lived token is stored — and the dry-run path are in
+[`docs/releasing.md`](docs/releasing.md).
+
 ```sh
 npm test              # 34 suites, including the pty round trip
 npm run test:live     # a real model turn through the TUI (needs credentials)
