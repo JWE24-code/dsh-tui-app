@@ -201,6 +201,18 @@ future source for bar colour instead of local thresholds.
 
 ## Traps that have cost real time
 
+- **A new Harness peer dependency must be marked optional in *both*
+  `package.json` and the lock file.** Every `@deepseek-ai/*` entry under
+  `peerDependencies` also needs an entry under `peerDependenciesMeta` with
+  `optional: true`, because the app reaches each service defensively and a
+  profile may not mount it. Miss the marker and `npm ci` treats that peer as
+  required, tries to resolve its whole transitive tree against the registry,
+  and fails the run at its first step — before a single test executes. It goes
+  unnoticed locally, where `link-types` has already made the harness
+  resolvable. Regenerate the lock with
+  `npm install --package-lock-only --ignore-scripts` (never a plain
+  `npm install`, which wipes the linked harness types) and check parity with
+  `npm ci --dry-run` before pushing.
 - **`STATE_VERSION` in `src/persist.ts` discards, it does not migrate.** A bump
   throws away all existing persisted state by design ("an entry from a different
   version is discarded rather than guessed at"). Bump it only for a genuine

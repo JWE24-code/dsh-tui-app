@@ -100,6 +100,9 @@
     "@deepseek-ai/dsh-cmdline": {
       "optional": true
     },
+    "@deepseek-ai/dsh-credentials": {
+      "optional": true
+    },
     "@deepseek-ai/dsh-llm": {
       "optional": true
     },
