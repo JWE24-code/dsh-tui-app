@@ -63,6 +63,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   through, so `alt+e`'s `$VISUAL`/`$EDITOR` round trip is hardened by the same
   fix, caught live when a broken `$EDITOR` reproduced the second bug on the
   first try.
+- **A completed browser sign-in could vanish instead of committing the
+  credential.** A flow racing a typed code against its own browser callback
+  withdraws the losing prompt through that prompt's own `signal` — the
+  callback winning is the ordinary case, not a refusal — and this app's
+  `prompt()` implementation rejected that withdrawal with
+  `AuthorizationDeclinedError`, the class reserved for a human explicitly
+  saying no. A flow that reads that rejection at face value discards the
+  credential it just obtained through the browser instead of finishing the
+  commit, which is what "the website said successful, but nothing came back"
+  looked like from here. The signal-abort path now rejects with a plain
+  error instead; only `esc` on a live prompt still raises the decline.
 
 ### Changed
 

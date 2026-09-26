@@ -3895,12 +3895,18 @@ class TuiApp {
           this.pendingLoginPrompt = pending
           this.paint()
           // A flow racing a typed code against a browser callback withdraws
-          // only the losing prompt this way, leaving the attempt running.
+          // only the losing prompt this way, leaving the attempt running —
+          // this is the browser callback winning, not a human saying no, and
+          // must not reject with AuthorizationDeclinedError: that class means
+          // specifically "the human declined," and a flow that reads it that
+          // way discards the credential it just got through the browser
+          // instead of finishing the commit. A plain rejection is what the
+          // contract asks for here.
           prompt.signal?.addEventListener('abort', () => {
             if (this.pendingLoginPrompt !== pending) return
             this.pendingLoginPrompt = undefined
             if (this.panel === login) login.setPrompt(undefined)
-            reject(new AuthorizationDeclinedError())
+            reject(new Error('prompt withdrawn — its own signal aborted'))
             this.paint()
           })
         }),
