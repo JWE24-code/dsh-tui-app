@@ -152,6 +152,44 @@ export declare function parseAnthropicUsage(body: unknown): CreditWindow[];
  * average, nothing invented.
  */
 export declare function anthropicBreakdownNotes(body: unknown): PlanNote[];
+/**
+ * A label for a Codex window stated as its length in seconds.
+ *
+ * The two enforced windows are the same shapes the other providers rate-limit
+ * on (5h session, 7d week), so they get the same labels; any other length —
+ * OpenAI has changed window sizes before — is named by its own length rather
+ * than squeezed into a label that lies about it.
+ */
+export declare function codexWindowLabel(seconds: number | undefined): string;
+/** What `/usage` could read from Codex's usage report, minus the block framing. */
+export interface CodexPlan {
+    /** The plan tier as stated, e.g. `plus`, `pro`. */
+    plan?: string;
+    windows: CreditWindow[];
+    balance?: CreditBalance;
+}
+/**
+ * Parse the ChatGPT/Codex usage report into its enforced windows and any
+ * credit balance.
+ *
+ * This endpoint has no published contract — it is the one the first-party
+ * Codex client reads, reverse-engineered independently by more than one
+ * third-party tracker, and it has already moved once (from response headers to
+ * this dedicated path). The parser is therefore written to the schema those
+ * trackers agree on and refuses on anything else: `used_percent` is a 0–100
+ * utilization like Anthropic's, so the window is `used` out of `limit: 100`.
+ *
+ * The one conversion that matters: `reset_at` is a Unix timestamp in
+ * **seconds**, where every other reset moment in this app arrives in
+ * milliseconds. Multiplying by 1000 is applied before anything else can
+ * mistake the figure for a 1970 date.
+ *
+ * `credits`, when present, is a prepaid balance in OpenAI's own credit units —
+ * the API publishes no maximum for it, so it is shown as a balance, never as a
+ * bar; a `has_credits: false` row is ignored, since a zero balance on a plan
+ * without credits is noise rather than a reading.
+ */
+export declare function parseCodexUsage(body: unknown): CodexPlan | undefined;
 /** `1h 12m` / `4d 9h` / `12m` — the shape every countdown in the app uses. */
 export declare function countdown(ms: number): string;
 /**

@@ -23,6 +23,7 @@
 import {
   anthropicBreakdownNotes,
   parseAnthropicUsage,
+  parseCodexUsage,
   parseDeepSeekBalance,
   parseZaiPlan,
   parseZaiQuota,
@@ -292,6 +293,53 @@ export function anthropicNotes(windows: readonly CreditWindow[]): PlanNote[] {
   return notes
 }
 
+// -------------------------------------------------------------------- Codex
+
+/**
+ * The ChatGPT/Codex usage report — the same figures the Codex CLI's own status
+ * line shows for a Plus/Pro plan.
+ *
+ * Like Anthropic's, this endpoint has no published contract: it is what the
+ * first-party client reads, reverse-engineered independently by more than one
+ * third-party tracker, and it has already moved once (its figures used to ride
+ * on `x-codex-*` response headers). Reached with the stored sign-in rather
+ * than an API key, and parsed by a sibling parser that refuses rather than
+ * improvises for the same reason as the Anthropic one.
+ */
+export const CODEX_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage'
+
+/** Codex: the ChatGPT plan's 5-hour and weekly utilization, plus any credits. */
+async function codexPlan(
+  route: Route,
+  lookup: CredentialLookup,
+  fetchImpl: FetchLike,
+  now: () => number,
+): Promise<ProviderPlan> {
+  const base: ProviderPlan = {
+    provider: route.provider,
+    displayName: route.displayName,
+    windows: [],
+    notes: [],
+  }
+  const token = await lookup.readGrantToken('llm-pi-ai', route.provider)
+  if (token === undefined) {
+    return { ...base, problem: 'not signed in — run /providers to connect a ChatGPT plan' }
+  }
+  const result = await getJson(fetchImpl, CODEX_USAGE_URL, token, now)
+  if ('error' in result) return { ...base, problem: result.error }
+  const parsed = parseCodexUsage(result.body)
+  if (parsed === undefined) {
+    return { ...base, problem: 'usage report could not be read' }
+  }
+  return {
+    ...base,
+    plan: parsed.plan,
+    balance: parsed.balance,
+    windows: parsed.windows,
+    problem: parsed.windows.length === 0 && parsed.balance === undefined ? 'no rate-limit windows reported' : undefined,
+  }
+}
+
 // ------------------------------------------------------------------ assembly
 
 /**
@@ -308,6 +356,7 @@ function probeFor(provider: string): typeof deepSeekPlan | undefined {
   if (looksLikeDeepSeek(id)) return deepSeekPlan
   if (id.includes('zai') || id.includes('z.ai') || id.includes('glm')) return zaiPlan
   if (id.includes('anthropic') || id.includes('claude')) return anthropicPlan
+  if (id.includes('codex') || id.includes('chatgpt') || id.includes('openai')) return codexPlan
   return undefined
 }
 

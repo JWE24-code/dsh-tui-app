@@ -18,6 +18,7 @@ import {
   friendlyName,
   PlanCache,
   PLAN_CACHE_TTL_MS,
+  CODEX_USAGE_URL,
   DEEPSEEK_BALANCE_URL,
   ZAI_QUOTA_URL,
   type CredentialLookup,
@@ -25,9 +26,11 @@ import {
 } from '../src/credits.ts'
 import {
   anthropicBreakdownNotes,
+  codexWindowLabel,
   countdown,
   money,
   parseAnthropicUsage,
+  parseCodexUsage,
   parseDeepSeekBalance,
   parseZaiPlan,
   parseZaiQuota,
@@ -416,9 +419,72 @@ check('a breakdown with nothing spent says nothing', anthropicBreakdownNotes({ s
 check('a missing breakdown says nothing', anthropicBreakdownNotes({}).length === 0)
 check('a malformed breakdown says nothing rather than guessing', anthropicBreakdownNotes({ seven_day_breakdown: { rows: 7 } }).length === 0)
 
-// --------------------------------------------------------------- PlanCache
+// ------------------------------------------------------------------- Codex
 
-// An injected clock walks the boundary exactly, which is the only honest way to
+// The schema two independent reverse-engineered trackers agree on for
+// GET /backend-api/wham/usage: plan tier, two percentage windows with
+// seconds-denominated resets, and an optional credit balance.
+const codexBody = {
+  plan_type: 'plus',
+  rate_limit: {
+    primary_window: { used_percent: 6, reset_at: 1_738_300_000, limit_window_seconds: 18_000 },
+    secondary_window: { used_percent: 24, reset_at: 1_738_900_000, limit_window_seconds: 604_800 },
+  },
+  credits: { has_credits: true, unlimited: false, balance: 820.6969075 },
+}
+const codexParsed = parseCodexUsage(codexBody)
+check('the documented Codex payload yields both windows', codexParsed?.windows.length === 2)
+check('the plan tier parses', codexParsed?.plan === 'plus')
+check('the 5h window gets the session label', codexParsed?.windows[0]?.label === 'Session (5h)')
+check('the 7d window gets the week label', codexParsed?.windows[1]?.label === 'Week (7d)')
+check('utilization is a percentage of 100', codexParsed?.windows[0]?.used === 6 && codexParsed?.windows[0]?.limit === 100)
+check('a seconds reset is converted to millis', codexParsed?.windows[0]?.resetAt === 1_738_300_000_000)
+check('a credit balance parses as credits, not currency', codexParsed?.balance?.total === 820.6969075 && codexParsed?.balance?.currency === 'credits')
+
+check('a payload with no secondary window yields only the primary', parseCodexUsage({ rate_limit: { primary_window: { used_percent: 3 } } })?.windows.length === 1)
+check('an unrecognized window length is named by that length', codexWindowLabel(9_000) === 'Window (3h)' )
+check('a missing window length is still labelled', codexWindowLabel(undefined) === 'Quota')
+check('a sub-hour window reads in minutes', codexWindowLabel(1_800) === 'Window (30m)')
+check('a has_credits:false balance is ignored', parseCodexUsage({ credits: { has_credits: false, balance: 0 } })?.balance === undefined)
+check('a payload with only a plan still parses', parseCodexUsage({ plan_type: 'pro' })?.plan === 'pro')
+check('a payload with nothing readable is refused', parseCodexUsage({ rate_limit: {} }) === undefined)
+check('a non-object body is refused', parseCodexUsage('nope') === undefined)
+check('a window with no utilization is not drawn', parseCodexUsage({ plan_type: 'pro', rate_limit: { primary_window: { reset_at: 5 } } })?.windows.length === 0)
+
+// The probe: signed in, answered, and parsed through the same collectPlans
+// containment every other route goes through.
+const codexCollected = await collectPlans(
+  [{ provider: 'openai-codex', displayName: 'OpenAI Codex (ChatGPT)' }],
+  { resolveKey: async () => undefined, readGrantToken: async () => 'token' },
+  async (url) =>
+    url === CODEX_USAGE_URL
+      ? { ok: true, status: 200, json: async () => codexBody }
+      : { ok: false, status: 500, json: async () => ({}) },
+  () => 1_738_000_000_000,
+)
+check('a Codex route has a probe', hasProbe('openai-codex'))
+check('a ChatGPT-named route matches the Codex probe', hasProbe('chatgpt'))
+check('the Codex probe reports both windows', codexCollected[0]?.windows.length === 2)
+check('the Codex probe carries the plan tier', codexCollected[0]?.plan === 'plus')
+check('the Codex probe carries the credit balance', codexCollected[0]?.balance !== undefined)
+
+const codexUnsigned = await collectPlans(
+  [{ provider: 'openai-codex', displayName: 'OpenAI Codex (ChatGPT)' }],
+  { resolveKey: async () => undefined, readGrantToken: async () => undefined },
+  async () => ({ ok: true, status: 200, json: async () => ({}) }),
+  () => 0,
+)
+check('a Codex route with no sign-in points at /providers', codexUnsigned[0]?.problem?.includes('/providers') === true)
+
+const codexUnreadable = await collectPlans(
+  [{ provider: 'openai-codex', displayName: 'OpenAI Codex (ChatGPT)' }],
+  { resolveKey: async () => undefined, readGrantToken: async () => 'token' },
+  async () => ({ ok: true, status: 200, json: async () => ({ nonsense: 1 }) }),
+  () => 0,
+)
+check('a Codex response of unknown shape refuses rather than improvises', codexUnreadable[0]?.problem?.includes('could not be read') === true)
+
+// --------------------------------------------------------------- PlanCache// An injected clock walks the boundary exactly, which is the only honest way to
 // test a TTL.
 let clock = 1_000
 const cache = new PlanCache(PLAN_CACHE_TTL_MS, () => clock)

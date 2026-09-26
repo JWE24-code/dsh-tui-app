@@ -75,7 +75,7 @@ Every feature or fix updates, in the same commit:
 - a test suite, registered in `package.json`'s `test` script (the offline-import
   walker reads that script, so an unregistered suite is also an unchecked one).
 
-The README quotes a suite/assertion total (currently **34 suites, 1786
+The README quotes a suite/assertion total (currently **34 suites, 1809
 assertions**). Recompute and update it:
 
 ```bash
@@ -253,10 +253,17 @@ Reasonable next threads, none of them requested yet:
 
 The first three of those have since landed (severity colours the bar, the
 breakdown is a note under the Claude block, and `PlanCache` in `src/credits.ts`
-holds the last reading for `PLAN_CACHE_TTL_MS`); the codex probe is still open.
-Two facts learned doing it: the live `limits[]` row for the weekly window
-arrives `is_active: false` while describing the week that is drawn (so the
-parser ignores that flag), and the agent-harness sandbox exports `NO_COLOR=1`
-and `TERM=dumb`, which the app honours — start the tmux pane with
+holds the last reading for `PLAN_CACHE_TTL_MS`); the fourth — the codex probe —
+landed after that, against `chatgpt.com/backend-api/wham/usage`, a schema no
+published contract covers: it was taken from two independent reverse-engineered
+trackers that agree ([OpenUsage's notes](https://github.com/PowerUserZ/OpenTokenUsage/blob/main/docs/providers/codex.md)
+and headroom's `codex_rate_limits.py`), not from a live response — no Codex
+sign-in exists on this machine, so the parser's happy path is tested against
+the documented schema and only the unsigned path has been live-verified. Give
+it a real sign-in via `/providers` and check `/usage` before trusting the
+numbers. Two facts learned doing it: the live `limits[]` row for the weekly
+window arrives `is_active: false` while describing the week that is drawn (so
+the parser ignores that flag), and the agent-harness sandbox exports
+`NO_COLOR=1` and `TERM=dumb`, which the app honours — start the tmux pane with
 `env -u NO_COLOR TERM=xterm-256color dsh --profile tui-dev` when verifying
 colour claims live, or every bar will honestly render uncoloured.

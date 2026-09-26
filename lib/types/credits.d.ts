@@ -91,6 +91,18 @@ export declare const ANTHROPIC_USAGE_URL = "https://api.anthropic.com/api/oauth/
  * where a spent week costs days.
  */
 export declare function anthropicNotes(windows: readonly CreditWindow[]): PlanNote[];
+/**
+ * The ChatGPT/Codex usage report — the same figures the Codex CLI's own status
+ * line shows for a Plus/Pro plan.
+ *
+ * Like Anthropic's, this endpoint has no published contract: it is what the
+ * first-party client reads, reverse-engineered independently by more than one
+ * third-party tracker, and it has already moved once (its figures used to ride
+ * on `x-codex-*` response headers). Reached with the stored sign-in rather
+ * than an API key, and parsed by a sibling parser that refuses rather than
+ * improvises for the same reason as the Anthropic one.
+ */
+export declare const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 /** Whether `/usage` has a plan probe for a route at all. */
 export declare function hasProbe(provider: string): boolean;
 /**

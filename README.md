@@ -706,6 +706,7 @@ printed: a token goes into an `Authorization` header and nowhere else.
 | DeepSeek | prepaid balance, granted vs topped up, availability, peak-window state | `DEEPSEEK_API_KEY` |
 | z.ai | plan tier, 5-hour and weekly credit windows, renewal date and price | `ZAI_API_KEY` |
 | Claude (Pro/Max) | 5-hour session and 7-day week utilization, the provider's own severity per window, which surface spent the week | the sign-in `/providers` stored |
+| OpenAI Codex (ChatGPT) | plan tier, 5-hour and weekly utilization, remaining credits | the sign-in `/providers` stored |
 
 Every probe runs concurrently and every one of them resolves: a provider that is
 unset, down, or slow costs its own block a line of explanation and leaves the
@@ -724,6 +725,13 @@ is red there where a percentage rule would still call it roomy. Anthropic's
 report also names which surfaces spent the week's allowance — Claude Code
 versus chat versus everything else — and the block says so, because "the week
 is nearly spent" only becomes a decision when it says what the week went on.
+
+The Codex report is the least contractual of the four: OpenAI publishes no
+contract for it, and its figures have already moved once — from `x-codex-*`
+response headers to the dedicated path the probe reads now. The parser is
+written to the schema independent reverse-engineered trackers agree on, with
+its one genuine trap handled: Codex states reset moments in Unix *seconds*,
+where every other provider here states milliseconds.
 
 The parsers refuse rather than improvise. A field that is missing or of the wrong
 type yields "could not be read", never a zero dressed up as a measurement —
@@ -961,7 +969,7 @@ regression still would.
     provider parses the real command line.
   - `dsh --profile tui </dev/null` boots the bundle and exits on the non-TTY
     guard.
-- **34 suites, 1786 assertions**, covering rendering (including a pty round
+- **34 suites, 1809 assertions**, covering rendering (including a pty round
   trip through the real screen, decoder, and frame renderer), streaming
   projection, queueing, steering, persistence, the usage ledger and its
   colored dashboard, session storage, cross-session search, the panels

@@ -8,6 +8,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A plan probe for OpenAI Codex (ChatGPT).** The route has had a sign-in
+  since `/providers` landed but reported nothing in `/usage`; it now shows the
+  ChatGPT plan's tier, its 5-hour and weekly utilization, and any remaining
+  credits. The endpoint has no published contract — it is what the first-party
+  Codex client reads, reverse-engineered independently by more than one
+  third-party tracker, and it has already moved once from `x-codex-*` response
+  headers — so the parser is written to the schema those trackers agree on and
+  refuses on any other shape. Its one real trap is handled: Codex states reset
+  moments in Unix seconds where every other provider states milliseconds.
 - **Provider-stated severity colors the plan bars.** Anthropic's usage report
   states per window how pressed it considers the limit (`normal`, `warning`,
   `critical`), and that word now colors the bar instead of the local percentage
